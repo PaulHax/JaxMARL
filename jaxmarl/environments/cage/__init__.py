@@ -1,5 +1,6 @@
 """CAGE-JAX: JAX implementation of CAGE Challenge 2 environment."""
 
+from jaxmarl.environments.cage.cage_env import CageEnv, make_cage_env
 from jaxmarl.environments.cage.state import (
     CageState,
     CageConst,
@@ -26,6 +27,8 @@ from jaxmarl.environments.cage.state import (
 )
 
 __all__ = [
+    'CageEnv',
+    'make_cage_env',
     'CageState',
     'CageConst',
     'create_scenario2_const',
