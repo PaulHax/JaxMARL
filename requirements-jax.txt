@@ -1,0 +1,13 @@
+# Core JAX (CPU-only for development)
+jax
+jaxlib
+chex
+flax
+
+# Testing
+pytest
+pytest-xdist
+
+# Benchmarking (runs both CybORG and CAGE-JAX)
+matplotlib
+pandas
