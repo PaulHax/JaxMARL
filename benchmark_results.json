@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-01-22T18:13:04.906845",
+  "hardware": {
+    "platform": "Linux-5.15.153.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+    "processor": "x86_64",
+    "python_version": "3.10.18",
+    "jax_version": "0.6.2",
+    "jax_devices": [
+      "TFRT_CPU_0"
+    ]
+  },
+  "single_env": {
+    "steps": 5000,
+    "time_seconds": 1.402761160999944,
+    "steps_per_second": 3564.3986581691506
+  },
+  "parallel_envs": {
+    "num_envs": 256,
+    "steps_per_env": 500,
+    "total_steps": 128000,
+    "time_seconds": 0.21489571300026,
+    "steps_per_second": 595637.7547645407,
+    "env_steps_per_second": 2326.709979548987
+  },
+  "episode_rollout": {
+    "num_episodes": 100,
+    "total_steps": 10000,
+    "time_seconds": 3.840659470999981,
+    "episodes_per_second": 26.037195110652,
+    "steps_per_second": 2603.7195110652
+  },
+  "speedup": {
+    "parallel_vs_single": 167.1075016817814
+  }
+}
