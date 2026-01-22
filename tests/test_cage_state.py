@@ -116,17 +116,21 @@ def test_subnet_adjacency():
 
 
 def test_confidentiality_values():
-    """Test confidentiality values match Scenario 2."""
+    """Test confidentiality values match CybORG Scenario 2."""
     const = create_scenario2_const()
 
-    # User hosts have no confidentiality value
+    # User0 has None confidentiality (0.0)
     assert const.host_confidentiality[HOST_IDS['User0']] == 0.0
 
-    # Enterprise hosts have medium value
+    # User1-4 default to Low (0.1) per CybORG
+    assert const.host_confidentiality[HOST_IDS['User1']] == 0.1
+
+    # Enterprise hosts have Medium value (1.0)
     assert const.host_confidentiality[HOST_IDS['Enterprise0']] == 1.0
 
-    # Op_Server0 has high value
-    assert const.host_confidentiality[HOST_IDS['Op_Server0']] == 10.0
+    # Op_Server0 has Medium confidentiality (1.0), High availability (10.0)
+    assert const.host_confidentiality[HOST_IDS['Op_Server0']] == 1.0
+    assert const.host_availability[HOST_IDS['Op_Server0']] == 10.0
 
 
 def test_service_vulnerability_mapping():

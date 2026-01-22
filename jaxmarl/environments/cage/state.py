@@ -140,18 +140,25 @@ def create_scenario2_const() -> CageConst:
         OS_LINUX, OS_LINUX, OS_WINDOWS, OS_WINDOWS          # Op_Host0-2, Op_Server0
     ], dtype=jnp.int32)
 
-    # Confidentiality values (higher = more valuable to compromise)
+    # Confidentiality values from Scenario2.yaml
+    # Mapping: None=0.0, Low=0.1, Medium=1.0, High=10.0
+    # CybORG defaults to 'Low' (0.1) if not specified
     host_confidentiality = jnp.array([
-        0.0, 0.0, 0.0, 0.0, 0.0,      # User0-4: None
-        1.0, 1.0, 1.0, 0.0,            # Enterprise0-2: Medium, Defender: None
-        1.0, 1.0, 1.0, 10.0            # Op_Host0-2: Medium, Op_Server0: High
+        0.0,                           # User0: None
+        0.1, 0.1, 0.1, 0.1,            # User1-4: Low (default, no ConfidentialityValue listed)
+        1.0, 1.0, 1.0,                 # Enterprise0-2: Medium
+        0.1,                           # Defender: Low (default)
+        0.1, 0.1, 0.1,                 # Op_Host0-2: Low (default)
+        1.0,                           # Op_Server0: Medium
     ], dtype=jnp.float32)
 
-    # Availability values
+    # Availability values from Scenario2.yaml
     host_availability = jnp.array([
-        0.0, 0.0, 0.0, 0.0, 0.0,      # User0-4: None
-        1.0, 1.0, 1.0, 0.0,            # Enterprise: Medium
-        1.0, 1.0, 1.0, 10.0            # Operational: High for Op_Server0
+        0.0, 0.0, 0.0, 0.0, 0.0,       # User0-4: None
+        1.0, 1.0, 1.0,                 # Enterprise0-2: Medium
+        0.1,                           # Defender: Low (default)
+        0.1, 0.1, 0.1,                 # Op_Host0-2: Low (default)
+        10.0,                          # Op_Server0: High
     ], dtype=jnp.float32)
 
     # Initial services running on each host

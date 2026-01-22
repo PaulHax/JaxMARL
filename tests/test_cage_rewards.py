@@ -38,21 +38,22 @@ class TestBasicRewards:
         assert rewards['blue'] == 0.0
         assert rewards['red'] == 0.0
 
-    def test_user_compromise_half_value(self, const, initial_state):
-        """User-level compromise gives 50% of host value."""
-        # Compromise Enterprise0 (value = 1.0)
+    def test_user_compromise_no_reward(self, const, initial_state):
+        """User-level compromise gives NO reward (CybORG only counts root/SYSTEM)."""
+        # Compromise Enterprise0 with user access (value = 1.0)
         state = initial_state.replace(
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER)
         )
 
         rewards = compute_rewards_simple(state, const)
 
-        assert rewards['red'] == 0.5 * CONFIDENTIALITY_SCALE
-        assert rewards['blue'] == -rewards['red']
+        # CybORG only gives reward for privileged (root/SYSTEM) sessions
+        assert rewards['red'] == 0.0
+        assert rewards['blue'] == 0.0
 
     def test_privileged_compromise_full_value(self, const, initial_state):
-        """Privileged compromise gives full host value."""
-        # Compromise Enterprise0 with privileged access
+        """Privileged compromise gives full host confidentiality value."""
+        # Compromise Enterprise0 with privileged access (value = 1.0)
         state = initial_state.replace(
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
         )
@@ -93,20 +94,20 @@ class TestOpServerReward:
 
         rewards = compute_rewards_simple(state, const)
 
-        # Op_Server0 has confidentiality 10.0 and availability 10.0
-        expected_red = 10.0 * CONFIDENTIALITY_SCALE + 10.0 * AVAILABILITY_SCALE
+        # Op_Server0: confidentiality=Medium(1.0), availability=High(10.0)
+        expected_red = 1.0 * CONFIDENTIALITY_SCALE + 10.0 * AVAILABILITY_SCALE
         assert rewards['red'] == expected_red
 
-    def test_op_server_user_no_availability(self, const, initial_state):
-        """User-level access on Op_Server0 doesn't trigger availability."""
+    def test_op_server_user_no_reward(self, const, initial_state):
+        """User-level access on Op_Server0 gives NO reward (need root/SYSTEM)."""
         state = initial_state.replace(
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_USER)
         )
 
         rewards = compute_rewards_simple(state, const)
 
-        # Only 50% confidentiality, no availability
-        expected_red = 10.0 * 0.5 * CONFIDENTIALITY_SCALE
+        # CybORG: no reward for user-level sessions
+        expected_red = 0.0
         assert rewards['red'] == expected_red
 
 
@@ -132,14 +133,19 @@ class TestActionCosts:
 
 class TestMaxReward:
     def test_max_red_reward(self, const):
-        """Calculate maximum possible Red reward."""
+        """Calculate maximum possible Red reward (CybORG Scenario2 values)."""
         max_reward = get_max_red_reward(const)
 
-        # All hosts compromised: sum of all confidentiality + Op_Server0 availability
-        # User hosts: 0, Enterprise: 3*1.0, Op: 3*1.0 + 10.0 = 16.0
-        # Plus availability: 10.0
-        expected = 16.0 + 10.0
-        assert max_reward == expected
+        # From Scenario2.yaml with CybORG value mapping:
+        # User0: 0.0, User1-4: 0.1*4=0.4
+        # Enterprise0-2: 1.0*3=3.0
+        # Defender: 0.1
+        # Op_Host0-2: 0.1*3=0.3
+        # Op_Server0 confidentiality: 1.0
+        # Op_Server0 availability: 10.0
+        # Total: 0.0 + 0.4 + 3.0 + 0.1 + 0.3 + 1.0 + 10.0 = 14.8
+        expected = 14.8
+        assert abs(max_reward - expected) < 0.01
 
 
 class TestJITCompilation:
@@ -167,17 +173,17 @@ class TestJITCompilation:
 
 class TestRewardScenarios:
     def test_foothold_reward(self, const, foothold_state):
-        """Foothold state (User0 with user access) should have zero reward."""
+        """Foothold state (User0 with USER access) should have zero reward."""
         rewards = compute_rewards_simple(foothold_state, const)
 
-        # User0 has no confidentiality value
+        # CybORG: user-level doesn't count, only root/SYSTEM
         assert rewards['red'] == 0.0
 
     def test_full_compromise_scenario(self, const, initial_state):
-        """Test reward for realistic attack path: Enterprise + Op_Server."""
-        # Red compromises Enterprise0 (user) and Op_Server0 (privileged)
+        """Test reward for realistic attack path: Enterprise + Op_Server (privileged)."""
+        # Red compromises Enterprise0 (privileged) and Op_Server0 (privileged)
         state = initial_state.replace(
-            host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER)
+            host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
         )
         state = state.replace(
             host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED)
@@ -185,9 +191,9 @@ class TestRewardScenarios:
 
         rewards = compute_rewards_simple(state, const)
 
-        # Enterprise0: 0.5 * 1.0 = 0.5
-        # Op_Server0: 1.0 * 10.0 + 10.0 (availability) = 20.0
-        expected_red = 0.5 + 20.0
+        # Enterprise0: 1.0 (Medium)
+        # Op_Server0: 1.0 (Medium) + 10.0 (High availability) = 11.0
+        expected_red = 1.0 + 11.0
         assert rewards['red'] == expected_red
 
 

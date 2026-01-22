@@ -26,31 +26,21 @@ def compute_rewards(
 ) -> dict[str, chex.Array]:
     """Compute rewards for both agents.
 
-    Red reward:
-        - Gains confidentiality value for each compromised host
-        - Gains availability value for impacting operational hosts
-
-    Blue reward:
-        - Negative of Red's confidentiality/availability gains (zero-sum)
-        - Additional cost for Restore actions
+    CybORG-equivalent reward calculation:
+    - Red only gets confidentiality for PRIVILEGED (root/SYSTEM) sessions
+    - Red gets availability for disrupted OT services (Impact on Op_Server0)
+    - Blue reward is negative of Red's (zero-sum base)
+    - Blue pays additional cost for Restore actions
 
     Returns:
         Dict with 'blue' and 'red' reward scalars.
     """
-    # Red confidentiality reward: sum of values for compromised hosts
-    # Weighted by compromise level (user = 0.5, privileged = 1.0)
-    compromise_weights = jnp.where(
-        state.host_compromised >= COMPROMISE_PRIVILEGED,
-        1.0,
-        jnp.where(
-            state.host_compromised >= COMPROMISE_USER,
-            0.5,
-            0.0,
-        )
-    )
+    # Red confidentiality reward: sum of values for hosts with PRIVILEGED access
+    # CybORG only counts root (Linux) or SYSTEM (Windows) sessions
+    privileged_hosts = (state.host_compromised >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
 
     confidentiality_reward = jnp.sum(
-        compromise_weights * const.host_confidentiality * CONFIDENTIALITY_SCALE
+        privileged_hosts * const.host_confidentiality * CONFIDENTIALITY_SCALE
     )
 
     # Availability penalty: for impacted operational hosts
@@ -87,21 +77,13 @@ def compute_rewards(
 def compute_rewards_simple(state: CageState, const: CageConst) -> dict[str, chex.Array]:
     """Simplified reward computation without action costs.
 
-    Used for testing and observation-only reward calculation.
+    CybORG-equivalent: Only PRIVILEGED access counts for confidentiality.
     """
-    # Red confidentiality reward
-    compromise_weights = jnp.where(
-        state.host_compromised >= COMPROMISE_PRIVILEGED,
-        1.0,
-        jnp.where(
-            state.host_compromised >= COMPROMISE_USER,
-            0.5,
-            0.0,
-        )
-    )
+    # Red confidentiality reward: only for privileged (root/SYSTEM) sessions
+    privileged_hosts = (state.host_compromised >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
 
     confidentiality_reward = jnp.sum(
-        compromise_weights * const.host_confidentiality * CONFIDENTIALITY_SCALE
+        privileged_hosts * const.host_confidentiality * CONFIDENTIALITY_SCALE
     )
 
     # Availability for Op_Server0
@@ -130,7 +112,16 @@ def verify_zero_sum(rewards: dict[str, chex.Array], tolerance: float = 1e-6) -> 
 
 
 def get_max_red_reward(const: CageConst) -> float:
-    """Calculate maximum possible Red reward (all hosts fully compromised)."""
+    """Calculate maximum possible Red reward (all hosts with privileged access + Impact).
+
+    Based on Scenario2.yaml values:
+    - User0: 0.0, User1-4: 0.1 each = 0.4
+    - Enterprise0-2: 1.0 each = 3.0
+    - Defender: 0.1
+    - Op_Host0-2: 0.1 each = 0.3
+    - Op_Server0: 1.0 (confidentiality) + 10.0 (availability if impacted) = 11.0
+    Total max = 0.0 + 0.4 + 3.0 + 0.1 + 0.3 + 11.0 = 14.8
+    """
     max_confidentiality = jnp.sum(const.host_confidentiality * CONFIDENTIALITY_SCALE)
     max_availability = const.host_availability[HOST_IDS['Op_Server0']] * AVAILABILITY_SCALE
     return float(max_confidentiality + max_availability)
