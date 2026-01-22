@@ -4,23 +4,11 @@ These tests verify that CAGE-JAX produces equivalent results to the
 original CybORG CAGE Challenge 2 implementation.
 
 Requirements:
-- CybORG must be installed from /home/paulhax/src/cyber/cage-challenge-2/
+- CybORG path added via conftest.py
 - Run with: pytest tests/test_cage_cyborg_equivalence.py -v
 """
 
-import sys
 import pytest
-
-# Add CybORG to path
-sys.path.insert(0, '/home/paulhax/src/cyber/cage-challenge-2/CybORG')
-
-try:
-    from CybORG import CybORG
-    from CybORG.Agents import B_lineAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-    CYBORG_AVAILABLE = True
-except ImportError:
-    CYBORG_AVAILABLE = False
 
 import jax
 import jax.numpy as jnp
@@ -31,13 +19,16 @@ from jaxmarl.environments.cage.state import (
 )
 
 
-# Skip all tests if CybORG not available
-pytestmark = pytest.mark.skipif(
-    not CYBORG_AVAILABLE,
-    reason="CybORG not installed"
-)
+def _cyborg_available():
+    """Check if CybORG is available (called at test time, not import time)."""
+    try:
+        from CybORG import CybORG
+        return True
+    except ImportError:
+        return False
 
 
+@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestHostValueEquivalence:
     """Verify host values match between CAGE-JAX and CybORG Scenario2."""
 
@@ -74,7 +65,7 @@ class TestHostValueEquivalence:
 
         for host, expected_val in expected.items():
             actual = float(const.host_confidentiality[HOST_IDS[host]])
-            assert actual == expected_val, f"{host}: expected {expected_val}, got {actual}"
+            assert abs(actual - expected_val) < 1e-5, f"{host}: expected {expected_val}, got {actual}"
 
     def test_host_availability_values(self):
         """Verify availability values match Scenario2.yaml."""
@@ -92,9 +83,10 @@ class TestHostValueEquivalence:
 
         for host, expected_val in expected.items():
             actual = float(const.host_availability[HOST_IDS[host]])
-            assert actual == expected_val, f"{host}: expected {expected_val}, got {actual}"
+            assert abs(actual - expected_val) < 1e-5, f"{host}: expected {expected_val}, got {actual}"
 
 
+@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestRewardEquivalence:
     """Verify reward calculations match CybORG."""
 
@@ -137,6 +129,7 @@ class TestRewardEquivalence:
         assert rewards['blue'] == -11.0
 
 
+@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestInitialStateEquivalence:
     """Verify initial state matches CybORG."""
 
@@ -161,6 +154,7 @@ class TestInitialStateEquivalence:
                 assert state.host_compromised[idx] == 0, f"{host} should be clean"
 
 
+@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestObservationEquivalence:
     """Verify observation shapes match expected dimensions."""
 
@@ -179,19 +173,19 @@ class TestObservationEquivalence:
         assert obs['red'].shape == (40,)
 
 
-@pytest.mark.skipif(not CYBORG_AVAILABLE, reason="CybORG not installed")
+@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestCybORGComparison:
     """Direct comparison tests that run both CybORG and CAGE-JAX."""
 
     @pytest.fixture
     def cyborg_env(self):
         """Create CybORG environment."""
+        from CybORG import CybORG
         path = '/home/paulhax/src/cyber/cage-challenge-2/CybORG/CybORG/Shared/Scenarios/Scenario2.yaml'
         return CybORG(scenario_file=path, environment='sim')
 
     def test_episode_length(self, cyborg_env):
         """Both environments should run for 100 steps."""
-        # CAGE-JAX
         jax_env = CageEnv(max_steps=100)
         assert jax_env.max_steps == 100
 
@@ -199,7 +193,6 @@ class TestCybORGComparison:
         """Action space sizes should be reasonable for both."""
         jax_env = CageEnv()
 
-        # CAGE-JAX action spaces
         from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, NUM_RED_ACTIONS
 
         # CybORG action spaces vary dynamically, but our fixed sizes should cover

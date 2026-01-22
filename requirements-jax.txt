@@ -8,6 +8,13 @@ flax
 pytest
 pytest-xdist
 
-# Benchmarking (runs both CybORG and CAGE-JAX)
+# Benchmarking
 matplotlib
 pandas
+
+# CybORG dependencies (for equivalence tests)
+# These are needed if running tests/test_cage_cyborg_equivalence.py
+paramiko
+pyyaml
+loguru
+prettytable
