@@ -4,11 +4,12 @@ These tests verify that CAGE-JAX produces equivalent results to the
 original CybORG CAGE Challenge 2 implementation.
 
 Requirements:
-- CybORG path added via conftest.py
+- CybORG installed: pip install -r requirements-jax.txt
 - Run with: pytest tests/test_cage_cyborg_equivalence.py -v
 """
 
 import pytest
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -20,12 +21,25 @@ from jaxmarl.environments.cage.state import (
 
 
 def _cyborg_available():
-    """Check if CybORG is available (called at test time, not import time)."""
+    """Check if CybORG is available."""
     try:
         from CybORG import CybORG
         return True
     except ImportError:
         return False
+
+
+def _get_cyborg_scenario_path(scenario_name: str = "Scenario2.yaml") -> Path:
+    """Get path to CybORG scenario file using importlib."""
+    import importlib.util
+    spec = importlib.util.find_spec("CybORG")
+    if spec is None or spec.origin is None:
+        raise ImportError("CybORG package not found")
+    cyborg_path = Path(spec.origin).parent
+    scenario_path = cyborg_path / "Shared" / "Scenarios" / scenario_name
+    if not scenario_path.exists():
+        raise FileNotFoundError(f"Scenario file not found: {scenario_path}")
+    return scenario_path
 
 
 @pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
@@ -34,10 +48,6 @@ class TestHostValueEquivalence:
 
     def test_value_mapping(self):
         """Verify the value mapping matches CybORG."""
-        # CybORG mapping from RedRewardCalculator.py
-        cyborg_mapping = {'None': 0.0, 'Low': 0.1, 'Medium': 1.0, 'High': 10.0}
-
-        # Our mapping should match
         from jaxmarl.environments.cage.rewards import CONFIDENTIALITY_SCALE, AVAILABILITY_SCALE
         assert CONFIDENTIALITY_SCALE == 1.0
         assert AVAILABILITY_SCALE == 1.0
@@ -46,21 +56,20 @@ class TestHostValueEquivalence:
         """Verify confidentiality values match Scenario2.yaml."""
         const = create_scenario2_const()
 
-        # From Scenario2.yaml:
         expected = {
-            'User0': 0.0,        # ConfidentialityValue: None
-            'User1': 0.1,        # Not specified -> Low default
+            'User0': 0.0,
+            'User1': 0.1,
             'User2': 0.1,
             'User3': 0.1,
             'User4': 0.1,
-            'Enterprise0': 1.0,  # Medium
-            'Enterprise1': 1.0,  # Medium
-            'Enterprise2': 1.0,  # Medium
-            'Defender': 0.1,     # Not specified -> Low default
-            'Op_Host0': 0.1,     # Not specified -> Low default
+            'Enterprise0': 1.0,
+            'Enterprise1': 1.0,
+            'Enterprise2': 1.0,
+            'Defender': 0.1,
+            'Op_Host0': 0.1,
             'Op_Host1': 0.1,
             'Op_Host2': 0.1,
-            'Op_Server0': 1.0,   # Medium (NOT High - availability is High)
+            'Op_Server0': 1.0,
         }
 
         for host, expected_val in expected.items():
@@ -72,13 +81,13 @@ class TestHostValueEquivalence:
         const = create_scenario2_const()
 
         expected = {
-            'User0': 0.0,        # None
-            'User1': 0.0,        # None
-            'Enterprise0': 1.0,  # Medium
+            'User0': 0.0,
+            'User1': 0.0,
+            'Enterprise0': 1.0,
             'Enterprise1': 1.0,
             'Enterprise2': 1.0,
-            'Defender': 0.1,     # Low default
-            'Op_Server0': 10.0,  # High
+            'Defender': 0.1,
+            'Op_Server0': 10.0,
         }
 
         for host, expected_val in expected.items():
@@ -98,14 +107,12 @@ class TestRewardEquivalence:
         const = create_scenario2_const()
         state = create_initial_state(const)
 
-        # Compromise Enterprise0 with privileged access
         state = state.replace(
             host_compromised=state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
         )
 
         rewards = compute_rewards_simple(state, const)
 
-        # CybORG: Enterprise0 Medium = 1.0
         assert rewards['red'] == 1.0
         assert rewards['blue'] == -1.0
 
@@ -117,14 +124,12 @@ class TestRewardEquivalence:
         const = create_scenario2_const()
         state = create_initial_state(const)
 
-        # Compromise Op_Server0 with privileged access
         state = state.replace(
             host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED)
         )
 
         rewards = compute_rewards_simple(state, const)
 
-        # CybORG: Op_Server0 confidentiality=Medium(1.0) + availability=High(10.0)
         assert rewards['red'] == 11.0
         assert rewards['blue'] == -11.0
 
@@ -138,7 +143,6 @@ class TestInitialStateEquivalence:
         env = CageEnv()
         obs, state = env.reset(jax.random.PRNGKey(0))
 
-        # Red has user-level access on User0
         from jaxmarl.environments.cage.state import COMPROMISE_USER
         assert state.host_compromised[HOST_IDS['User0']] == COMPROMISE_USER
         assert state.red_sessions[HOST_IDS['User0']] == 1
@@ -148,7 +152,6 @@ class TestInitialStateEquivalence:
         env = CageEnv()
         obs, state = env.reset(jax.random.PRNGKey(0))
 
-        # All hosts except User0 should be clean
         for host, idx in HOST_IDS.items():
             if host != 'User0':
                 assert state.host_compromised[idx] == 0, f"{host} should be clean"
@@ -181,8 +184,8 @@ class TestCybORGComparison:
     def cyborg_env(self):
         """Create CybORG environment."""
         from CybORG import CybORG
-        path = '/home/paulhax/src/cyber/cage-challenge-2/CybORG/CybORG/Shared/Scenarios/Scenario2.yaml'
-        return CybORG(scenario_file=path, environment='sim')
+        scenario_path = _get_cyborg_scenario_path()
+        return CybORG(scenario_file=str(scenario_path), environment='sim')
 
     def test_episode_length(self, cyborg_env):
         """Both environments should run for 100 steps."""
@@ -191,14 +194,16 @@ class TestCybORGComparison:
 
     def test_action_space_sizes(self, cyborg_env):
         """Action space sizes should be reasonable for both."""
-        jax_env = CageEnv()
-
         from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, NUM_RED_ACTIONS
 
-        # CybORG action spaces vary dynamically, but our fixed sizes should cover
-        # the main action types
-        assert NUM_BLUE_ACTIONS > 30  # Sleep + Monitor + Analyse + Remove + Restore + Decoys
-        assert NUM_RED_ACTIONS > 100  # Sleep + Discover + Scan + Exploits + PrivEsc + Impact
+        assert NUM_BLUE_ACTIONS > 30
+        assert NUM_RED_ACTIONS > 100
+
+    def test_cyborg_initial_state(self, cyborg_env):
+        """Verify CybORG initial state structure."""
+        cyborg_env.reset()
+        true_state = cyborg_env.get_true_state({'Sessions': True})
+        assert 'Red' in str(true_state) or len(true_state) > 0
 
 
 if __name__ == "__main__":

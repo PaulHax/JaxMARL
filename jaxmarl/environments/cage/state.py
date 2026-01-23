@@ -1,9 +1,14 @@
-"""CAGE-JAX state dataclasses for Scenario 2."""
+"""CAGE-JAX state dataclasses with configurable scenario support."""
 
 import jax.numpy as jnp
 from flax import struct
 import chex
+from typing import Dict, Optional
 
+from jaxmarl.environments.cage.config import ScenarioConfig, create_scenario2_config
+
+
+# Default constants for backward compatibility (Scenario 2)
 NUM_HOSTS = 13
 NUM_SUBNETS = 3
 NUM_SERVICES = 10
@@ -11,7 +16,7 @@ NUM_EXPLOITS = 8
 NUM_DECOY_TYPES = 8
 MAX_PROCESSES = 20
 
-# Host IDs (Scenario 2)
+# Host IDs (Scenario 2) - for backward compatibility
 HOST_IDS = {
     'User0': 0, 'User1': 1, 'User2': 2, 'User3': 3, 'User4': 4,
     'Enterprise0': 5, 'Enterprise1': 6, 'Enterprise2': 7, 'Defender': 8,
@@ -62,24 +67,28 @@ OS_WINDOWS = 1
 
 @struct.dataclass
 class CageState:
-    """Mutable game state for CAGE environment."""
+    """Mutable game state for CAGE environment.
+
+    All arrays are sized based on max dimensions to support JIT compilation.
+    Actual sizes are determined by const.num_hosts, const.num_subnets, etc.
+    """
     time: int
     done: chex.Array  # scalar bool
 
     # Host state tensors
-    host_compromised: chex.Array       # (13,) int: 0=None, 1=User, 2=Privileged
-    host_services: chex.Array          # (13, 10) bool: service running flags
-    host_processes: chex.Array         # (13, 20) int: process IDs (0=empty)
-    host_decoys: chex.Array            # (13, 8) bool: decoy type deployed
+    host_compromised: chex.Array       # (max_hosts,) int: 0=None, 1=User, 2=Privileged
+    host_services: chex.Array          # (max_hosts, max_services) bool: service running flags
+    host_processes: chex.Array         # (max_hosts, max_processes) int: process IDs (0=empty)
+    host_decoys: chex.Array            # (max_hosts, max_decoys) bool: decoy type deployed
 
     # Session tracking
-    red_sessions: chex.Array           # (13,) int: session count per host
-    red_privilege: chex.Array          # (13,) int: 0=None, 1=User, 2=Root/SYSTEM
-    blue_sessions: chex.Array          # (13,) int: always 1 per host (Velociraptor)
+    red_sessions: chex.Array           # (max_hosts,) int: session count per host
+    red_privilege: chex.Array          # (max_hosts,) int: 0=None, 1=User, 2=Root/SYSTEM
+    blue_sessions: chex.Array          # (max_hosts,) int: always 1 per host (Velociraptor)
 
     # Red agent knowledge (partial observability)
-    red_discovered_hosts: chex.Array   # (13,) bool: host IP discovered
-    red_scanned_hosts: chex.Array      # (13,) bool: ports scanned
+    red_discovered_hosts: chex.Array   # (max_hosts,) bool: host IP discovered
+    red_scanned_hosts: chex.Array      # (max_hosts,) bool: ports scanned
 
     # Reward tracking
     cumulative_red_reward: chex.Array   # scalar float
@@ -91,140 +100,177 @@ class CageState:
 
 @struct.dataclass
 class CageConst:
-    """Immutable configuration for CAGE environment (Scenario 2)."""
+    """Immutable configuration for CAGE environment."""
     # Network topology
-    adjacency: chex.Array              # (13, 13) bool: can host i reach host j
-    subnet_adjacency: chex.Array       # (3, 3) bool: subnet connectivity
+    adjacency: chex.Array              # (num_hosts, num_hosts) bool: can host i reach host j
+    subnet_adjacency: chex.Array       # (num_subnets, num_subnets) bool: subnet connectivity
+    host_subnet: chex.Array            # (num_hosts,) int: which subnet each host belongs to
 
     # Host properties
-    host_os: chex.Array                # (13,) int: 0=Linux, 1=Windows
-    host_confidentiality: chex.Array   # (13,) float: reward weight
-    host_availability: chex.Array      # (13,) float: availability weight
-    initial_services: chex.Array       # (13, 10) bool: initial service config
+    host_os: chex.Array                # (num_hosts,) int: 0=Linux, 1=Windows
+    host_confidentiality: chex.Array   # (num_hosts,) float: reward weight
+    host_availability: chex.Array      # (num_hosts,) float: availability weight
+    initial_services: chex.Array       # (num_hosts, num_services) bool: initial service config
+    operational_targets: chex.Array    # (num_hosts,) bool: hosts that provide availability reward
 
     # Service vulnerability mapping: which exploits work on which services
-    service_exploits: chex.Array       # (10, 8) bool: service i vulnerable to exploit j
+    service_exploits: chex.Array       # (num_services, num_exploits) bool: service i vulnerable to exploit j
+
+    # Indices for decoy-deployable hosts
+    decoy_host_indices: chex.Array     # (num_decoy_hosts,) int: indices of hosts that can have decoys
+
+    # Red agent initial foothold
+    red_start_hosts: chex.Array        # (num_red_agents,) int: initial compromise host indices
 
     # Scenario parameters
     max_steps: int = 100
     num_hosts: int = NUM_HOSTS
     num_subnets: int = NUM_SUBNETS
+    num_services: int = NUM_SERVICES
+    num_exploits: int = NUM_EXPLOITS
+    num_decoys: int = NUM_DECOY_TYPES
+    num_decoy_hosts: int = 8
+    num_red_agents: int = 1
+    num_blue_agents: int = 1
 
 
-def create_scenario2_const() -> CageConst:
-    """Create constants for CAGE Challenge 2 Scenario 2."""
+def build_const_from_config(config: ScenarioConfig) -> CageConst:
+    """Build CageConst from ScenarioConfig."""
+    num_hosts = config.num_hosts
+    num_subnets = config.num_subnets
+    num_services = config.num_services
+    num_exploits = config.num_exploits
+    num_decoys = config.num_decoys
 
-    # Network adjacency - hosts can reach others in same or adjacent subnets
-    # User subnet (0-4) <-> Enterprise subnet (5-8) <-> Operational subnet (9-12)
-    adjacency = jnp.zeros((NUM_HOSTS, NUM_HOSTS), dtype=jnp.bool_)
+    host_ids = config.host_ids
+    subnet_ids = config.subnet_ids
+    service_ids = config.service_ids
+    exploit_ids = config.exploit_ids
 
-    # Subnet adjacency: User <-> Enterprise <-> Operational
-    subnet_adjacency = jnp.array([
-        [True, True, False],   # User can reach Enterprise
-        [True, True, True],    # Enterprise can reach both
-        [False, True, True],   # Operational can reach Enterprise
-    ], dtype=jnp.bool_)
+    # Build host_subnet mapping
+    host_subnet = jnp.zeros(num_hosts, dtype=jnp.int32)
+    for h in config.hosts:
+        host_subnet = host_subnet.at[host_ids[h.name]].set(subnet_ids[h.subnet])
+
+    # Build subnet adjacency from config
+    subnet_adjacency = jnp.zeros((num_subnets, num_subnets), dtype=jnp.bool_)
+    for s in config.subnets:
+        src_idx = subnet_ids[s.name]
+        for connected in s.connected_subnets:
+            dst_idx = subnet_ids[connected]
+            subnet_adjacency = subnet_adjacency.at[src_idx, dst_idx].set(True)
 
     # Build host adjacency from subnet adjacency
-    for i in range(NUM_HOSTS):
-        for j in range(NUM_HOSTS):
-            subnet_i = HOST_SUBNET[i]
-            subnet_j = HOST_SUBNET[j]
+    adjacency = jnp.zeros((num_hosts, num_hosts), dtype=jnp.bool_)
+    for i in range(num_hosts):
+        for j in range(num_hosts):
+            subnet_i = int(host_subnet[i])
+            subnet_j = int(host_subnet[j])
             adjacency = adjacency.at[i, j].set(subnet_adjacency[subnet_i, subnet_j])
 
-    # Host OS: User hosts are mixed, Enterprise/Operational have Windows servers
-    # Simplified: User0-4 Linux, Enterprise0-2 Windows, Defender Linux, Op mixed
-    host_os = jnp.array([
-        OS_LINUX, OS_LINUX, OS_LINUX, OS_LINUX, OS_LINUX,  # User0-4
-        OS_WINDOWS, OS_WINDOWS, OS_WINDOWS, OS_LINUX,       # Enterprise0-2, Defender
-        OS_LINUX, OS_LINUX, OS_WINDOWS, OS_WINDOWS          # Op_Host0-2, Op_Server0
-    ], dtype=jnp.int32)
+    # Build host OS array
+    host_os = jnp.zeros(num_hosts, dtype=jnp.int32)
+    for h in config.hosts:
+        os_val = OS_WINDOWS if h.os.lower() == 'windows' else OS_LINUX
+        host_os = host_os.at[host_ids[h.name]].set(os_val)
 
-    # Confidentiality values from Scenario2.yaml
-    # Mapping: None=0.0, Low=0.1, Medium=1.0, High=10.0
-    # CybORG defaults to 'Low' (0.1) if not specified
-    host_confidentiality = jnp.array([
-        0.0,                           # User0: None
-        0.1, 0.1, 0.1, 0.1,            # User1-4: Low (default, no ConfidentialityValue listed)
-        1.0, 1.0, 1.0,                 # Enterprise0-2: Medium
-        0.1,                           # Defender: Low (default)
-        0.1, 0.1, 0.1,                 # Op_Host0-2: Low (default)
-        1.0,                           # Op_Server0: Medium
-    ], dtype=jnp.float32)
+    # Build confidentiality and availability arrays
+    host_confidentiality = jnp.zeros(num_hosts, dtype=jnp.float32)
+    host_availability = jnp.zeros(num_hosts, dtype=jnp.float32)
+    operational_targets = jnp.zeros(num_hosts, dtype=jnp.bool_)
 
-    # Availability values from Scenario2.yaml
-    host_availability = jnp.array([
-        0.0, 0.0, 0.0, 0.0, 0.0,       # User0-4: None
-        1.0, 1.0, 1.0,                 # Enterprise0-2: Medium
-        0.1,                           # Defender: Low (default)
-        0.1, 0.1, 0.1,                 # Op_Host0-2: Low (default)
-        10.0,                          # Op_Server0: High
-    ], dtype=jnp.float32)
+    for h in config.hosts:
+        idx = host_ids[h.name]
+        host_confidentiality = host_confidentiality.at[idx].set(h.confidentiality)
+        host_availability = host_availability.at[idx].set(h.availability)
+        if h.is_operational_target:
+            operational_targets = operational_targets.at[idx].set(True)
 
-    # Initial services running on each host
-    # Rows: hosts, Cols: services (ssh, ftp, http, https, smtp, mysql, smb, rdp, tomcat, haraka)
-    initial_services = jnp.zeros((NUM_HOSTS, NUM_SERVICES), dtype=jnp.bool_)
+    # Build initial services
+    initial_services = jnp.zeros((num_hosts, num_services), dtype=jnp.bool_)
+    for h in config.hosts:
+        host_idx = host_ids[h.name]
+        for svc in h.services:
+            if svc in service_ids:
+                svc_idx = service_ids[svc]
+                initial_services = initial_services.at[host_idx, svc_idx].set(True)
 
-    # User hosts: SSH
-    for i in range(5):
-        initial_services = initial_services.at[i, SERVICE_IDS['ssh']].set(True)
+    # Build service-exploit vulnerability matrix
+    service_exploits = jnp.zeros((num_services, num_exploits), dtype=jnp.bool_)
+    for svc, vulns in config.service_vulnerabilities.items():
+        if svc in service_ids:
+            svc_idx = service_ids[svc]
+            for exploit in vulns:
+                if exploit in exploit_ids:
+                    exp_idx = exploit_ids[exploit]
+                    service_exploits = service_exploits.at[svc_idx, exp_idx].set(True)
 
-    # Enterprise hosts: various services
-    initial_services = initial_services.at[HOST_IDS['Enterprise0'], SERVICE_IDS['ssh']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Enterprise0'], SERVICE_IDS['http']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Enterprise1'], SERVICE_IDS['ssh']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Enterprise1'], SERVICE_IDS['smb']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Enterprise2'], SERVICE_IDS['ssh']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Enterprise2'], SERVICE_IDS['tomcat']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Defender'], SERVICE_IDS['ssh']].set(True)
+    # Build decoy host indices
+    decoy_indices = config.decoy_host_indices
+    decoy_host_indices = jnp.array(decoy_indices, dtype=jnp.int32)
 
-    # Operational hosts
-    initial_services = initial_services.at[HOST_IDS['Op_Host0'], SERVICE_IDS['ssh']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Op_Host1'], SERVICE_IDS['ssh']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Op_Host2'], SERVICE_IDS['rdp']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Op_Server0'], SERVICE_IDS['ssh']].set(True)
-    initial_services = initial_services.at[HOST_IDS['Op_Server0'], SERVICE_IDS['http']].set(True)
-
-    # Service-exploit vulnerability mapping
-    # Rows: services, Cols: exploits
-    service_exploits = jnp.zeros((NUM_SERVICES, NUM_EXPLOITS), dtype=jnp.bool_)
-    service_exploits = service_exploits.at[SERVICE_IDS['ssh'], EXPLOIT_IDS['SSHBruteForce']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['ftp'], EXPLOIT_IDS['FTPDirectoryTraversal']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['http'], EXPLOIT_IDS['HTTPRFI']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['https'], EXPLOIT_IDS['HTTPSRFI']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['haraka'], EXPLOIT_IDS['HarakaRCE']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['mysql'], EXPLOIT_IDS['SQLInjection']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['smb'], EXPLOIT_IDS['EternalBlue']].set(True)
-    service_exploits = service_exploits.at[SERVICE_IDS['rdp'], EXPLOIT_IDS['BlueKeep']].set(True)
+    # Build red start hosts
+    red_agents = config.get_red_agents()
+    red_start_hosts = jnp.zeros(len(red_agents), dtype=jnp.int32)
+    for i, agent in enumerate(red_agents):
+        if agent.starting_host:
+            red_start_hosts = red_start_hosts.at[i].set(host_ids[agent.starting_host])
 
     return CageConst(
         adjacency=adjacency,
         subnet_adjacency=subnet_adjacency,
+        host_subnet=host_subnet,
         host_os=host_os,
         host_confidentiality=host_confidentiality,
         host_availability=host_availability,
         initial_services=initial_services,
+        operational_targets=operational_targets,
         service_exploits=service_exploits,
-        max_steps=100,
-        num_hosts=NUM_HOSTS,
-        num_subnets=NUM_SUBNETS,
+        decoy_host_indices=decoy_host_indices,
+        red_start_hosts=red_start_hosts,
+        max_steps=config.max_steps,
+        num_hosts=num_hosts,
+        num_subnets=num_subnets,
+        num_services=num_services,
+        num_exploits=num_exploits,
+        num_decoys=num_decoys,
+        num_decoy_hosts=len(decoy_indices),
+        num_red_agents=config.num_red_agents,
+        num_blue_agents=config.num_blue_agents,
     )
+
+
+def create_scenario2_const() -> CageConst:
+    """Create constants for CAGE Challenge 2 Scenario 2."""
+    config = create_scenario2_config()
+    return build_const_from_config(config)
+
+
+def create_const_from_scenario(scenario_name: str) -> CageConst:
+    """Create CageConst from a named scenario."""
+    from jaxmarl.environments.cage.config import get_scenario
+    config = get_scenario(scenario_name)
+    return build_const_from_config(config)
 
 
 def create_initial_state(const: CageConst) -> CageState:
     """Create initial state for CAGE environment."""
+    num_hosts = const.num_hosts
+    num_services = const.num_services
+    num_decoys = const.num_decoys
+
     return CageState(
         time=0,
         done=jnp.array(False),
-        host_compromised=jnp.zeros(NUM_HOSTS, dtype=jnp.int32),
+        host_compromised=jnp.zeros(num_hosts, dtype=jnp.int32),
         host_services=const.initial_services.copy(),
-        host_processes=jnp.zeros((NUM_HOSTS, MAX_PROCESSES), dtype=jnp.int32),
-        host_decoys=jnp.zeros((NUM_HOSTS, NUM_DECOY_TYPES), dtype=jnp.bool_),
-        red_sessions=jnp.zeros(NUM_HOSTS, dtype=jnp.int32),
-        red_privilege=jnp.zeros(NUM_HOSTS, dtype=jnp.int32),
-        blue_sessions=jnp.ones(NUM_HOSTS, dtype=jnp.int32),  # Blue has session on all hosts
-        red_discovered_hosts=jnp.zeros(NUM_HOSTS, dtype=jnp.bool_),
-        red_scanned_hosts=jnp.zeros(NUM_HOSTS, dtype=jnp.bool_),
+        host_processes=jnp.zeros((num_hosts, MAX_PROCESSES), dtype=jnp.int32),
+        host_decoys=jnp.zeros((num_hosts, num_decoys), dtype=jnp.bool_),
+        red_sessions=jnp.zeros(num_hosts, dtype=jnp.int32),
+        red_privilege=jnp.zeros(num_hosts, dtype=jnp.int32),
+        blue_sessions=jnp.ones(num_hosts, dtype=jnp.int32),
+        red_discovered_hosts=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_scanned_hosts=jnp.zeros(num_hosts, dtype=jnp.bool_),
         cumulative_red_reward=jnp.array(0.0),
         cumulative_blue_reward=jnp.array(0.0),
         last_red_action_success=jnp.array(False),
@@ -232,16 +278,19 @@ def create_initial_state(const: CageConst) -> CageState:
 
 
 def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
-    """Create initial state where Red has a foothold on User0 (standard CC2 setup)."""
+    """Create initial state where Red has a foothold on configured start hosts."""
     state = create_initial_state(const)
 
-    # Red starts with User-level access on User0
+    # Set up red foothold using scatter operations (JAX-compatible)
+    red_start_mask = jnp.zeros(const.num_hosts, dtype=jnp.bool_)
+    red_start_mask = red_start_mask.at[const.red_start_hosts].set(True)
+
     state = state.replace(
-        host_compromised=state.host_compromised.at[HOST_IDS['User0']].set(COMPROMISE_USER),
-        red_sessions=state.red_sessions.at[HOST_IDS['User0']].set(1),
-        red_privilege=state.red_privilege.at[HOST_IDS['User0']].set(COMPROMISE_USER),
-        red_discovered_hosts=state.red_discovered_hosts.at[HOST_IDS['User0']].set(True),
-        red_scanned_hosts=state.red_scanned_hosts.at[HOST_IDS['User0']].set(True),
+        host_compromised=jnp.where(red_start_mask, COMPROMISE_USER, state.host_compromised),
+        red_sessions=jnp.where(red_start_mask, 1, state.red_sessions),
+        red_privilege=jnp.where(red_start_mask, COMPROMISE_USER, state.red_privilege),
+        red_discovered_hosts=red_start_mask | state.red_discovered_hosts,
+        red_scanned_hosts=red_start_mask | state.red_scanned_hosts,
     )
 
     return state

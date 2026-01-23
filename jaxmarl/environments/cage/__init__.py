@@ -1,10 +1,27 @@
 """CAGE-JAX: JAX implementation of CAGE Challenge 2 environment."""
 
 from jaxmarl.environments.cage.cage_env import CageEnv, make_cage_env
+from jaxmarl.environments.cage.config import (
+    ScenarioConfig,
+    HostConfig,
+    SubnetConfig,
+    AgentConfig,
+    create_scenario2_config,
+    create_scalable_config,
+    create_hosts_2_config,
+    create_hosts_3_config,
+    create_hosts_4_config,
+    create_hosts_5_config,
+    create_multi_agent_config,
+    get_scenario,
+    SCENARIOS,
+)
 from jaxmarl.environments.cage.state import (
     CageState,
     CageConst,
     create_scenario2_const,
+    create_const_from_scenario,
+    build_const_from_config,
     create_initial_state,
     create_initial_state_with_red_foothold,
     NUM_HOSTS,
@@ -27,13 +44,32 @@ from jaxmarl.environments.cage.state import (
 )
 
 __all__ = [
+    # Environment
     'CageEnv',
     'make_cage_env',
+    # Configuration
+    'ScenarioConfig',
+    'HostConfig',
+    'SubnetConfig',
+    'AgentConfig',
+    'create_scenario2_config',
+    'create_scalable_config',
+    'create_hosts_2_config',
+    'create_hosts_3_config',
+    'create_hosts_4_config',
+    'create_hosts_5_config',
+    'create_multi_agent_config',
+    'get_scenario',
+    'SCENARIOS',
+    # State
     'CageState',
     'CageConst',
     'create_scenario2_const',
+    'create_const_from_scenario',
+    'build_const_from_config',
     'create_initial_state',
     'create_initial_state_with_red_foothold',
+    # Constants (backward compatibility)
     'NUM_HOSTS',
     'NUM_SUBNETS',
     'NUM_SERVICES',

@@ -1,4 +1,4 @@
-"""CAGE-JAX observation encoding."""
+"""CAGE-JAX observation encoding with configurable support."""
 
 import jax
 import jax.numpy as jnp
@@ -7,94 +7,75 @@ from functools import partial
 
 from jaxmarl.environments.cage.state import (
     CageState, CageConst,
-    NUM_HOSTS, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
+    COMPROMISE_USER, COMPROMISE_PRIVILEGED,
 )
 
-# Blue observation: 4 features per host = 52 dims
-# [scan_detected, exploit_detected, user_compromised, privileged_compromised] × 13 hosts
+# Default observation dimensions for backward compatibility (Scenario 2)
+NUM_HOSTS = 13
 BLUE_OBS_PER_HOST = 4
 BLUE_OBS_DIM = NUM_HOSTS * BLUE_OBS_PER_HOST  # 52
 
-# Red observation: 1 success flag + 3 features per host = 40 dims
-# success_flag + [scanned, user_access, privileged_access] × 13 hosts
 RED_OBS_PER_HOST = 3
 RED_OBS_DIM = 1 + NUM_HOSTS * RED_OBS_PER_HOST  # 40
 
 
-@partial(jax.jit, static_argnums=[])
-def get_blue_obs(state: CageState) -> chex.Array:
+def compute_blue_obs_dim(const: CageConst) -> int:
+    """Compute blue observation dimension for given configuration."""
+    return const.num_hosts * BLUE_OBS_PER_HOST
+
+
+def compute_red_obs_dim(const: CageConst) -> int:
+    """Compute red observation dimension for given configuration."""
+    return 1 + const.num_hosts * RED_OBS_PER_HOST
+
+
+def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
     """Get Blue agent observation.
 
     Returns:
-        Array of shape (52,) with per-host features:
-        - scan_detected: activity indicator (simplified: any red session)
-        - exploit_detected: activity indicator (simplified: any compromise)
+        Array of shape (num_hosts * 4,) with per-host features:
+        - scan_detected: activity indicator
+        - exploit_detected: activity indicator
         - user_compromised: host has user-level compromise
         - privileged_compromised: host has privileged compromise
     """
-    obs = jnp.zeros((NUM_HOSTS, BLUE_OBS_PER_HOST), dtype=jnp.float32)
-
-    # Detection based on red sessions (simplified detection model)
-    # In full CybORG, this depends on Monitor action and probabilistic detection
     scan_detected = (state.red_scanned_hosts).astype(jnp.float32)
     exploit_detected = (state.red_sessions > 0).astype(jnp.float32)
-
-    # Compromise levels
     user_compromised = (state.host_compromised >= COMPROMISE_USER).astype(jnp.float32)
     privileged_compromised = (state.host_compromised >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
 
-    obs = obs.at[:, 0].set(scan_detected)
-    obs = obs.at[:, 1].set(exploit_detected)
-    obs = obs.at[:, 2].set(user_compromised)
-    obs = obs.at[:, 3].set(privileged_compromised)
-
+    obs = jnp.stack([scan_detected, exploit_detected, user_compromised, privileged_compromised], axis=1)
     return obs.flatten()
 
 
-@partial(jax.jit, static_argnums=[])
-def get_red_obs(state: CageState) -> chex.Array:
+def get_red_obs(state: CageState, const: CageConst) -> chex.Array:
     """Get Red agent observation.
 
     Returns:
-        Array of shape (40,) with:
+        Array of shape (1 + num_hosts * 3,) with:
         - success_flag: whether last action succeeded
-        - Per-host features (×13):
+        - Per-host features:
           - scanned: host has been port scanned
           - user_access: Red has user-level access
           - privileged_access: Red has privileged access
     """
-    obs = jnp.zeros(RED_OBS_DIM, dtype=jnp.float32)
+    scanned = state.red_scanned_hosts.astype(jnp.float32)
+    user_access = (state.red_privilege >= COMPROMISE_USER).astype(jnp.float32)
+    privileged_access = (state.red_privilege >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
 
-    # Success flag from last action
-    obs = obs.at[0].set(state.last_red_action_success.astype(jnp.float32))
+    host_obs = jnp.stack([scanned, user_access, privileged_access], axis=1).flatten()
+    success_flag = state.last_red_action_success.astype(jnp.float32).reshape(1)
 
-    # Per-host features
-    for i in range(NUM_HOSTS):
-        base_idx = 1 + i * RED_OBS_PER_HOST
-
-        # Host scanned
-        obs = obs.at[base_idx].set(state.red_scanned_hosts[i].astype(jnp.float32))
-
-        # User access
-        obs = obs.at[base_idx + 1].set(
-            (state.red_privilege[i] >= COMPROMISE_USER).astype(jnp.float32)
-        )
-
-        # Privileged access
-        obs = obs.at[base_idx + 2].set(
-            (state.red_privilege[i] >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
-        )
-
-    return obs
+    return jnp.concatenate([success_flag, host_obs])
 
 
-def get_obs(state: CageState) -> dict[str, chex.Array]:
+def get_obs(state: CageState, const: CageConst) -> dict[str, chex.Array]:
     """Get observations for both agents.
 
     Returns:
         Dict with 'blue' and 'red' observation arrays.
     """
     return {
-        'blue': get_blue_obs(state),
-        'red': get_red_obs(state),
+        'blue': get_blue_obs(state, const),
+        'red': get_red_obs(state, const),
     }

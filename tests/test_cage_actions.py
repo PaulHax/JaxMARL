@@ -36,42 +36,42 @@ def foothold_state(const):
 
 
 class TestBlueActionDecoding:
-    def test_decode_sleep(self):
-        action_type, target, decoy = decode_blue_action(BLUE_SLEEP)
+    def test_decode_sleep(self, const):
+        action_type, target, decoy = decode_blue_action(BLUE_SLEEP, const)
         assert action_type == 0
 
-    def test_decode_monitor(self):
-        action_type, target, decoy = decode_blue_action(BLUE_MONITOR)
+    def test_decode_monitor(self, const):
+        action_type, target, decoy = decode_blue_action(BLUE_MONITOR, const)
         assert action_type == 1
 
-    def test_decode_remove(self):
-        action_type, target, decoy = decode_blue_action(BLUE_REMOVE_START + 5)
+    def test_decode_remove(self, const):
+        action_type, target, decoy = decode_blue_action(BLUE_REMOVE_START + 5, const)
         assert action_type == 3
         assert target == 5
 
-    def test_decode_restore(self):
-        action_type, target, decoy = decode_blue_action(BLUE_RESTORE_START + 8)
+    def test_decode_restore(self, const):
+        action_type, target, decoy = decode_blue_action(BLUE_RESTORE_START + 8, const)
         assert action_type == 4
         assert target == 8
 
 
 class TestRedActionDecoding:
-    def test_decode_sleep(self):
-        action_type, subnet, host, exploit = decode_red_action(RED_SLEEP)
+    def test_decode_sleep(self, const):
+        action_type, subnet, host, exploit = decode_red_action(RED_SLEEP, const)
         assert action_type == 0
 
-    def test_decode_discover(self):
-        action_type, subnet, host, exploit = decode_red_action(RED_DISCOVER_SUBNET_START + 1)
+    def test_decode_discover(self, const):
+        action_type, subnet, host, exploit = decode_red_action(RED_DISCOVER_SUBNET_START + 1, const)
         assert action_type == 1
         assert subnet == 1
 
-    def test_decode_scan(self):
-        action_type, subnet, host, exploit = decode_red_action(RED_SCAN_HOST_START + 5)
+    def test_decode_scan(self, const):
+        action_type, subnet, host, exploit = decode_red_action(RED_SCAN_HOST_START + 5, const)
         assert action_type == 2
         assert host == 5
 
-    def test_decode_privesc(self):
-        action_type, subnet, host, exploit = decode_red_action(RED_PRIVESC_START + 3)
+    def test_decode_privesc(self, const):
+        action_type, subnet, host, exploit = decode_red_action(RED_PRIVESC_START + 3, const)
         assert action_type == 4
         assert host == 3
 
@@ -79,14 +79,12 @@ class TestRedActionDecoding:
 class TestBlueActions:
     def test_remove_clears_compromise(self, const, foothold_state):
         """Test that Remove action clears compromise on target host."""
-        # Compromise a host first
         state = foothold_state.replace(
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
         )
 
-        # Apply Remove on Enterprise0
         remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
         new_state = apply_blue_action(state, jnp.array(remove_action), const)
 
@@ -96,13 +94,11 @@ class TestBlueActions:
 
     def test_restore_resets_host(self, const, foothold_state):
         """Test that Restore action resets host to initial state."""
-        # Modify host state
         state = foothold_state.replace(
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
             host_decoys=foothold_state.host_decoys.at[HOST_IDS['Enterprise0'], 0].set(True),
         )
 
-        # Apply Restore on Enterprise0
         restore_action = BLUE_RESTORE_START + HOST_IDS['Enterprise0']
         new_state = apply_blue_action(state, jnp.array(restore_action), const)
 
@@ -113,7 +109,6 @@ class TestBlueActions:
         """Test that Sleep action doesn't modify state."""
         new_state = apply_blue_action(initial_state, jnp.array(BLUE_SLEEP), const)
 
-        # State should be unchanged
         assert jnp.array_equal(new_state.host_compromised, initial_state.host_compromised)
         assert jnp.array_equal(new_state.host_decoys, initial_state.host_decoys)
 
@@ -123,11 +118,9 @@ class TestRedActions:
         """Test DiscoverRemoteSystems reveals hosts in subnet."""
         key = jax.random.PRNGKey(42)
 
-        # Red has foothold on User0, should be able to discover Enterprise subnet
         discover_enterprise = RED_DISCOVER_SUBNET_START + 1  # Enterprise subnet
         new_state = apply_red_action(foothold_state, jnp.array(discover_enterprise), const, key)
 
-        # Enterprise hosts should be discovered
         assert new_state.red_discovered_hosts[HOST_IDS['Enterprise0']]
         assert new_state.red_discovered_hosts[HOST_IDS['Enterprise1']]
         assert new_state.last_red_action_success
@@ -136,12 +129,10 @@ class TestRedActions:
         """Test DiscoverNetworkServices scans a host."""
         key = jax.random.PRNGKey(42)
 
-        # First discover the host
         state = foothold_state.replace(
             red_discovered_hosts=foothold_state.red_discovered_hosts.at[HOST_IDS['Enterprise0']].set(True)
         )
 
-        # Then scan it
         scan_action = RED_SCAN_HOST_START + HOST_IDS['Enterprise0']
         new_state = apply_red_action(state, jnp.array(scan_action), const, key)
 
@@ -152,7 +143,6 @@ class TestRedActions:
         """Test that scan fails if host not discovered."""
         key = jax.random.PRNGKey(42)
 
-        # Try to scan Enterprise0 without discovering it first
         scan_action = RED_SCAN_HOST_START + HOST_IDS['Enterprise0']
         new_state = apply_red_action(foothold_state, jnp.array(scan_action), const, key)
 
@@ -163,17 +153,14 @@ class TestRedActions:
         """Test exploit action can compromise a host."""
         key = jax.random.PRNGKey(42)
 
-        # Setup: discover and scan Enterprise0
         state = foothold_state.replace(
             red_discovered_hosts=foothold_state.red_discovered_hosts.at[HOST_IDS['Enterprise0']].set(True),
             red_scanned_hosts=foothold_state.red_scanned_hosts.at[HOST_IDS['Enterprise0']].set(True),
         )
 
-        # Exploit with SSHBruteForce (exploit 0) on Enterprise0
         from jaxmarl.environments.cage.state import EXPLOIT_IDS, NUM_HOSTS
         exploit_action = RED_EXPLOIT_START + EXPLOIT_IDS['SSHBruteForce'] * NUM_HOSTS + HOST_IDS['Enterprise0']
 
-        # Run multiple times to account for probabilistic success
         successes = 0
         for i in range(10):
             key, subkey = jax.random.split(key)
@@ -181,14 +168,12 @@ class TestRedActions:
             if new_state.host_compromised[HOST_IDS['Enterprise0']] == COMPROMISE_USER:
                 successes += 1
 
-        # Should succeed most of the time (80% success rate)
         assert successes >= 5
 
     def test_privesc(self, const, foothold_state):
         """Test privilege escalation."""
         key = jax.random.PRNGKey(42)
 
-        # Setup: Red has user access on Enterprise0
         state = foothold_state.replace(
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
@@ -197,7 +182,6 @@ class TestRedActions:
 
         privesc_action = RED_PRIVESC_START + HOST_IDS['Enterprise0']
 
-        # Run multiple times
         successes = 0
         for i in range(10):
             key, subkey = jax.random.split(key)
@@ -205,38 +189,28 @@ class TestRedActions:
             if new_state.red_privilege[HOST_IDS['Enterprise0']] == COMPROMISE_PRIVILEGED:
                 successes += 1
 
-        assert successes >= 7  # 90% success rate
+        assert successes >= 7
 
 
 class TestActionMasks:
     def test_blue_remove_mask(self, const, initial_state, foothold_state):
         """Test Remove action mask reflects compromised hosts."""
-        # Initial state: no hosts compromised (except setup)
         mask_initial = get_blue_action_mask(initial_state, const)
-
-        # Foothold state: User0 compromised
         mask_foothold = get_blue_action_mask(foothold_state, const)
 
-        # Remove User0 should be valid in foothold state
         assert mask_foothold[BLUE_REMOVE_START + HOST_IDS['User0']]
-
-        # Remove Enterprise0 should not be valid (not compromised)
         assert not mask_foothold[BLUE_REMOVE_START + HOST_IDS['Enterprise0']]
 
     def test_red_discover_mask(self, const, foothold_state):
         """Test DiscoverRemoteSystems mask based on Red's reach."""
         mask = get_red_action_mask(foothold_state, const)
 
-        # Red has session on User0, can discover User and Enterprise subnets
         assert mask[RED_DISCOVER_SUBNET_START + 0]  # User subnet
         assert mask[RED_DISCOVER_SUBNET_START + 1]  # Enterprise subnet
-
-        # Cannot directly discover Operational subnet
         assert not mask[RED_DISCOVER_SUBNET_START + 2]
 
     def test_red_scan_mask(self, const, foothold_state):
         """Test scan mask based on discovered hosts."""
-        # Initially only User0 is discovered
         mask = get_red_action_mask(foothold_state, const)
 
         assert mask[RED_SCAN_HOST_START + HOST_IDS['User0']]
@@ -263,7 +237,6 @@ class TestJITCompilation:
 
         key = jax.random.PRNGKey(0)
         result = apply_and_check(foothold_state, jnp.array(RED_SLEEP), key)
-        # Sleep doesn't set success flag
 
 
 if __name__ == "__main__":

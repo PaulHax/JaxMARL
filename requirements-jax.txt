@@ -12,9 +12,5 @@ pytest-xdist
 matplotlib
 pandas
 
-# CybORG dependencies (for equivalence tests)
-# These are needed if running tests/test_cage_cyborg_equivalence.py
-paramiko
-pyyaml
-loguru
-prettytable
+# CybORG from ITM-Kitware fork (for equivalence tests)
+CybORG @ git+https://github.com/ITM-Kitware/cage-challenge-2.git@main#subdirectory=CybORG

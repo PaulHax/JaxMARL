@@ -1,27 +1,24 @@
-"""CAGE-JAX action definitions and effects."""
+"""CAGE-JAX action definitions and effects with configurable support."""
 
 import jax
 import jax.numpy as jnp
 import chex
 from functools import partial
+from typing import Tuple
 
 from jaxmarl.environments.cage.state import (
     CageState, CageConst,
-    NUM_HOSTS, NUM_SUBNETS, NUM_SERVICES, NUM_EXPLOITS, NUM_DECOY_TYPES,
-    HOST_IDS, HOST_SUBNET, SERVICE_IDS, EXPLOIT_IDS, DECOY_IDS,
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
+    EXPLOIT_IDS, NUM_DECOY_TYPES,
 )
 
-# Blue action encoding
-# 0: Sleep
-# 1: Monitor
-# 2: Analyse
-# 3-15: Remove (one per host)
-# 16-28: Restore (one per host)
-# 29-36: DecoyApache (one per Enterprise/Op host, 8 hosts: 5-12)
-# 37-44: DecoySSHD (one per Enterprise/Op host)
-# ... (simplified: just use decoy type × host)
+# Default action space sizes for backward compatibility (Scenario 2 with 13 hosts)
+NUM_HOSTS = 13
+NUM_SUBNETS = 3
+NUM_SERVICES = 10
+NUM_EXPLOITS = 8
 
+# Blue action encoding for default scenario
 BLUE_SLEEP = 0
 BLUE_MONITOR = 1
 BLUE_ANALYSE = 2
@@ -29,22 +26,12 @@ BLUE_REMOVE_START = 3
 BLUE_RESTORE_START = 3 + NUM_HOSTS  # 16
 BLUE_DECOY_START = BLUE_RESTORE_START + NUM_HOSTS  # 29
 
-# For simplicity, decoys can be deployed on Enterprise/Operational hosts (indices 5-12 = 8 hosts)
-DECOY_HOSTS = jnp.arange(5, 13)  # Enterprise0-Op_Server0
+DECOY_HOSTS = jnp.arange(5, 13)  # Enterprise0-Op_Server0 for Scenario 2
 NUM_DECOY_HOSTS = 8
 
-# Total blue actions: 3 + 13 (remove) + 13 (restore) + 8*8 (decoys) = 93
-# Simplified: 3 + 13 + 13 + 8 = 37 (one decoy type)
 NUM_BLUE_ACTIONS = 3 + NUM_HOSTS + NUM_HOSTS + NUM_DECOY_HOSTS * NUM_DECOY_TYPES  # 93
 
-# Red action encoding
-# 0: Sleep
-# 1-3: DiscoverRemoteSystems per subnet
-# 4-16: DiscoverNetworkServices per host (13 hosts)
-# 17-120: Exploit (8 exploit types × 13 hosts = 104)
-# 121-133: PrivilegeEscalate per host
-# 134-146: Impact per host
-
+# Red action encoding for default scenario
 RED_SLEEP = 0
 RED_DISCOVER_SUBNET_START = 1
 RED_SCAN_HOST_START = RED_DISCOVER_SUBNET_START + NUM_SUBNETS  # 4
@@ -55,16 +42,50 @@ RED_IMPACT_START = RED_PRIVESC_START + NUM_HOSTS  # 134
 NUM_RED_ACTIONS = RED_IMPACT_START + NUM_HOSTS  # 147
 
 
-def decode_blue_action(action: int) -> tuple:
+def compute_blue_action_space_size(const: CageConst) -> int:
+    """Compute total blue action space size for given configuration."""
+    # 3 base actions + remove per host + restore per host + decoy per (decoy_host × decoy_type)
+    return 3 + const.num_hosts + const.num_hosts + const.num_decoy_hosts * const.num_decoys
+
+
+def compute_red_action_space_size(const: CageConst) -> int:
+    """Compute total red action space size for given configuration."""
+    # sleep + discover_subnet × subnets + scan × hosts + exploit × (exploits × hosts) + privesc × hosts + impact × hosts
+    return (1 + const.num_subnets + const.num_hosts +
+            const.num_exploits * const.num_hosts +
+            const.num_hosts + const.num_hosts)
+
+
+def get_blue_action_offsets(const: CageConst) -> Tuple[int, int, int]:
+    """Get blue action offsets for given configuration."""
+    remove_start = 3
+    restore_start = remove_start + const.num_hosts
+    decoy_start = restore_start + const.num_hosts
+    return remove_start, restore_start, decoy_start
+
+
+def get_red_action_offsets(const: CageConst) -> Tuple[int, int, int, int, int]:
+    """Get red action offsets for given configuration."""
+    discover_start = 1
+    scan_start = discover_start + const.num_subnets
+    exploit_start = scan_start + const.num_hosts
+    privesc_start = exploit_start + const.num_exploits * const.num_hosts
+    impact_start = privesc_start + const.num_hosts
+    return discover_start, scan_start, exploit_start, privesc_start, impact_start
+
+
+def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.Array, chex.Array]:
     """Decode blue action into (action_type, target_host, decoy_type)."""
+    remove_start, restore_start, decoy_start = get_blue_action_offsets(const)
+
     action_type = jnp.where(
-        action < BLUE_REMOVE_START,
-        action,  # Sleep, Monitor, or Analyse
+        action < remove_start,
+        action,  # Sleep=0, Monitor=1, Analyse=2
         jnp.where(
-            action < BLUE_RESTORE_START,
+            action < restore_start,
             3,  # Remove
             jnp.where(
-                action < BLUE_DECOY_START,
+                action < decoy_start,
                 4,  # Restore
                 5,  # Decoy
             )
@@ -72,44 +93,46 @@ def decode_blue_action(action: int) -> tuple:
     )
 
     target_host = jnp.where(
-        action < BLUE_REMOVE_START,
-        -1,  # No target for Sleep/Monitor/Analyse
+        action < remove_start,
+        -1,
         jnp.where(
-            action < BLUE_RESTORE_START,
-            action - BLUE_REMOVE_START,
+            action < restore_start,
+            action - remove_start,
             jnp.where(
-                action < BLUE_DECOY_START,
-                action - BLUE_RESTORE_START,
-                DECOY_HOSTS[(action - BLUE_DECOY_START) // NUM_DECOY_TYPES],
+                action < decoy_start,
+                action - restore_start,
+                const.decoy_host_indices[(action - decoy_start) // const.num_decoys],
             )
         )
     )
 
     decoy_type = jnp.where(
-        action >= BLUE_DECOY_START,
-        (action - BLUE_DECOY_START) % NUM_DECOY_TYPES,
+        action >= decoy_start,
+        (action - decoy_start) % const.num_decoys,
         -1,
     )
 
     return action_type, target_host, decoy_type
 
 
-def decode_red_action(action: int) -> tuple:
-    """Decode red action into (action_type, target_host/subnet, exploit_type)."""
+def decode_red_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.Array, chex.Array, chex.Array]:
+    """Decode red action into (action_type, target_subnet, target_host, exploit_type)."""
+    discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
+
     action_type = jnp.where(
-        action < RED_DISCOVER_SUBNET_START,
+        action < discover_start,
         0,  # Sleep
         jnp.where(
-            action < RED_SCAN_HOST_START,
+            action < scan_start,
             1,  # DiscoverRemoteSystems
             jnp.where(
-                action < RED_EXPLOIT_START,
+                action < exploit_start,
                 2,  # DiscoverNetworkServices
                 jnp.where(
-                    action < RED_PRIVESC_START,
+                    action < privesc_start,
                     3,  # Exploit
                     jnp.where(
-                        action < RED_IMPACT_START,
+                        action < impact_start,
                         4,  # PrivilegeEscalate
                         5,  # Impact
                     )
@@ -118,26 +141,24 @@ def decode_red_action(action: int) -> tuple:
         )
     )
 
-    # Target subnet for DiscoverRemoteSystems
     target_subnet = jnp.where(
-        (action >= RED_DISCOVER_SUBNET_START) & (action < RED_SCAN_HOST_START),
-        action - RED_DISCOVER_SUBNET_START,
+        (action >= discover_start) & (action < scan_start),
+        action - discover_start,
         -1,
     )
 
-    # Target host for scan/exploit/privesc/impact
     target_host = jnp.where(
-        (action >= RED_SCAN_HOST_START) & (action < RED_EXPLOIT_START),
-        action - RED_SCAN_HOST_START,
+        (action >= scan_start) & (action < exploit_start),
+        action - scan_start,
         jnp.where(
-            (action >= RED_EXPLOIT_START) & (action < RED_PRIVESC_START),
-            (action - RED_EXPLOIT_START) % NUM_HOSTS,
+            (action >= exploit_start) & (action < privesc_start),
+            (action - exploit_start) % const.num_hosts,
             jnp.where(
-                (action >= RED_PRIVESC_START) & (action < RED_IMPACT_START),
-                action - RED_PRIVESC_START,
+                (action >= privesc_start) & (action < impact_start),
+                action - privesc_start,
                 jnp.where(
-                    action >= RED_IMPACT_START,
-                    action - RED_IMPACT_START,
+                    action >= impact_start,
+                    action - impact_start,
                     -1,
                 )
             )
@@ -145,20 +166,18 @@ def decode_red_action(action: int) -> tuple:
     )
 
     exploit_type = jnp.where(
-        (action >= RED_EXPLOIT_START) & (action < RED_PRIVESC_START),
-        (action - RED_EXPLOIT_START) // NUM_HOSTS,
+        (action >= exploit_start) & (action < privesc_start),
+        (action - exploit_start) // const.num_hosts,
         -1,
     )
 
     return action_type, target_subnet, target_host, exploit_type
 
 
-@partial(jax.jit, static_argnums=[])
 def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) -> CageState:
     """Apply blue agent action to state."""
-    action_type, target_host, decoy_type = decode_blue_action(action)
+    action_type, target_host, decoy_type = decode_blue_action(action, const)
 
-    # Remove action: clear compromise and red sessions on target host
     state = jax.lax.cond(
         action_type == 3,  # Remove
         lambda s: _apply_remove(s, target_host),
@@ -166,7 +185,6 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
         state,
     )
 
-    # Restore action: reset host to initial state
     state = jax.lax.cond(
         action_type == 4,  # Restore
         lambda s: _apply_restore(s, target_host, const),
@@ -174,7 +192,6 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
         state,
     )
 
-    # Decoy action: deploy decoy on target host
     state = jax.lax.cond(
         action_type == 5,  # Decoy
         lambda s: _apply_decoy(s, target_host, decoy_type),
@@ -199,7 +216,7 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
     return state.replace(
         host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_NONE),
         host_services=state.host_services.at[target_host].set(const.initial_services[target_host]),
-        host_decoys=state.host_decoys.at[target_host].set(jnp.zeros(NUM_DECOY_TYPES, dtype=jnp.bool_)),
+        host_decoys=state.host_decoys.at[target_host].set(jnp.zeros(const.num_decoys, dtype=jnp.bool_)),
         red_sessions=state.red_sessions.at[target_host].set(0),
         red_privilege=state.red_privilege.at[target_host].set(COMPROMISE_NONE),
     )
@@ -212,7 +229,6 @@ def _apply_decoy(state: CageState, target_host: int, decoy_type: int) -> CageSta
     )
 
 
-@partial(jax.jit, static_argnums=[])
 def apply_red_action(
     state: CageState,
     action: chex.Array,
@@ -220,9 +236,8 @@ def apply_red_action(
     key: chex.PRNGKey
 ) -> CageState:
     """Apply red agent action to state."""
-    action_type, target_subnet, target_host, exploit_type = decode_red_action(action)
+    action_type, target_subnet, target_host, exploit_type = decode_red_action(action, const)
 
-    # DiscoverRemoteSystems: discover hosts in target subnet
     state = jax.lax.cond(
         action_type == 1,  # DiscoverRemoteSystems
         lambda s: _apply_discover_subnet(s, target_subnet, const),
@@ -230,7 +245,6 @@ def apply_red_action(
         state,
     )
 
-    # DiscoverNetworkServices: scan target host
     state = jax.lax.cond(
         action_type == 2,  # DiscoverNetworkServices
         lambda s: _apply_scan_host(s, target_host),
@@ -238,7 +252,6 @@ def apply_red_action(
         state,
     )
 
-    # Exploit: attempt to exploit target host
     key, subkey = jax.random.split(key)
     state = jax.lax.cond(
         action_type == 3,  # Exploit
@@ -247,7 +260,6 @@ def apply_red_action(
         state,
     )
 
-    # PrivilegeEscalate: escalate privileges on target host
     key, subkey = jax.random.split(key)
     state = jax.lax.cond(
         action_type == 4,  # PrivilegeEscalate
@@ -256,7 +268,6 @@ def apply_red_action(
         state,
     )
 
-    # Impact: disrupts services (for Op_Server0)
     state = jax.lax.cond(
         action_type == 5,  # Impact
         lambda s: _apply_impact(s, target_host),
@@ -269,34 +280,34 @@ def apply_red_action(
 
 def _apply_discover_subnet(state: CageState, target_subnet: int, const: CageConst) -> CageState:
     """Discover all hosts in target subnet if Red has access to adjacent subnet."""
-    # Check if Red has a session in a subnet that can reach target_subnet
-    red_subnets = jnp.zeros(NUM_SUBNETS, dtype=jnp.bool_)
-    for i in range(NUM_HOSTS):
+    num_hosts = const.num_hosts
+    num_subnets = const.num_subnets
+
+    red_subnets = jnp.zeros(num_subnets, dtype=jnp.bool_)
+
+    def check_subnet(i, red_subnets):
         has_session = state.red_sessions[i] > 0
-        subnet = HOST_SUBNET[i]
-        red_subnets = red_subnets.at[subnet].set(red_subnets[subnet] | has_session)
+        subnet = const.host_subnet[i]
+        return red_subnets.at[subnet].set(red_subnets[subnet] | has_session)
+
+    red_subnets = jax.lax.fori_loop(0, num_hosts, check_subnet, red_subnets)
 
     can_reach = jnp.any(red_subnets & const.subnet_adjacency[:, target_subnet])
 
-    # Discover all hosts in target subnet
-    new_discovered = state.red_discovered_hosts.copy()
-    for i in range(NUM_HOSTS):
-        is_in_subnet = HOST_SUBNET[i] == target_subnet
-        new_discovered = new_discovered.at[i].set(
-            new_discovered[i] | (can_reach & is_in_subnet)
-        )
+    def update_discovered(i, new_discovered):
+        is_in_subnet = const.host_subnet[i] == target_subnet
+        return new_discovered.at[i].set(new_discovered[i] | (can_reach & is_in_subnet))
 
-    success = can_reach
+    new_discovered = jax.lax.fori_loop(0, num_hosts, update_discovered, state.red_discovered_hosts)
 
     return state.replace(
         red_discovered_hosts=new_discovered,
-        last_red_action_success=success,
+        last_red_action_success=can_reach,
     )
 
 
 def _apply_scan_host(state: CageState, target_host: int) -> CageState:
     """Scan target host for services."""
-    # Can only scan if host is discovered
     can_scan = state.red_discovered_hosts[target_host]
 
     return state.replace(
@@ -315,24 +326,16 @@ def _apply_exploit(
     key: chex.PRNGKey
 ) -> CageState:
     """Attempt to exploit target host."""
-    # Preconditions:
-    # 1. Host must be scanned
-    # 2. Host must have vulnerable service running
-    # 3. No decoy matching the exploit type
-
     host_scanned = state.red_scanned_hosts[target_host]
 
-    # Check if any service on host is vulnerable to this exploit
-    services_on_host = state.host_services[target_host]  # (NUM_SERVICES,)
-    exploit_vulnerabilities = const.service_exploits[:, exploit_type]  # (NUM_SERVICES,)
+    services_on_host = state.host_services[target_host]
+    exploit_vulnerabilities = const.service_exploits[:, exploit_type]
     has_vulnerable_service = jnp.any(services_on_host & exploit_vulnerabilities)
 
-    # Check for decoy (simplified: decoy blocks if it matches exploit's target service)
-    # Map exploit to decoy type (simplified: exploit 0 -> decoy 0, etc.)
-    decoy_present = state.host_decoys[target_host, exploit_type % NUM_DECOY_TYPES]
+    decoy_present = state.host_decoys[target_host, exploit_type % const.num_decoys]
 
-    # Probabilistic success (0.8 for SSH brute force, 0.9 for others)
-    success_prob = jnp.where(exploit_type == EXPLOIT_IDS['SSHBruteForce'], 0.8, 0.9)
+    # SSH brute force (exploit 0) has 0.8 success rate, others 0.9
+    success_prob = jnp.where(exploit_type == 0, 0.8, 0.9)
     random_success = jax.random.uniform(key) < success_prob
 
     can_exploit = host_scanned & has_vulnerable_service & ~decoy_present
@@ -366,10 +369,7 @@ def _apply_exploit(
 
 def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> CageState:
     """Escalate privileges on target host."""
-    # Precondition: must have user-level session
     has_user_session = state.red_privilege[target_host] >= COMPROMISE_USER
-
-    # Probabilistic success (0.9)
     random_success = jax.random.uniform(key) < 0.9
 
     success = has_user_session & random_success
@@ -394,11 +394,8 @@ def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> Cag
 
 
 def _apply_impact(state: CageState, target_host: int) -> CageState:
-    """Impact action on operational host (disrupts services)."""
-    # Precondition: must have privileged access
+    """Impact action on operational host."""
     has_privileged = state.red_privilege[target_host] >= COMPROMISE_PRIVILEGED
-
-    # For now, impact is a successful action if we have privileged access
     success = has_privileged
 
     return state.replace(
@@ -408,63 +405,82 @@ def _apply_impact(state: CageState, target_host: int) -> CageState:
 
 def get_blue_action_mask(state: CageState, const: CageConst) -> chex.Array:
     """Return valid action mask for blue agent."""
-    mask = jnp.ones(NUM_BLUE_ACTIONS, dtype=jnp.bool_)
+    action_size = compute_blue_action_space_size(const)
+    mask = jnp.ones(action_size, dtype=jnp.bool_)
+    remove_start, restore_start, decoy_start = get_blue_action_offsets(const)
 
-    # Sleep, Monitor, Analyse always valid
     # Remove only valid if host is compromised
-    for i in range(NUM_HOSTS):
+    def check_remove(i, mask):
         remove_valid = state.host_compromised[i] > 0
-        mask = mask.at[BLUE_REMOVE_START + i].set(remove_valid)
+        return mask.at[remove_start + i].set(remove_valid)
 
-    # Restore always valid (but costly)
+    mask = jax.lax.fori_loop(0, const.num_hosts, check_remove, mask)
 
-    # Decoys only if not already deployed on that host
-    for i, host_idx in enumerate(DECOY_HOSTS):
-        for d in range(NUM_DECOY_TYPES):
-            decoy_action_idx = BLUE_DECOY_START + i * NUM_DECOY_TYPES + d
+    # Decoys only if not already deployed
+    def check_decoy_host(i, mask):
+        host_idx = const.decoy_host_indices[i]
+
+        def check_decoy_type(d, mask):
+            decoy_action_idx = decoy_start + i * const.num_decoys + d
             already_deployed = state.host_decoys[host_idx, d]
-            mask = mask.at[decoy_action_idx].set(~already_deployed)
+            return mask.at[decoy_action_idx].set(~already_deployed)
+
+        return jax.lax.fori_loop(0, const.num_decoys, check_decoy_type, mask)
+
+    mask = jax.lax.fori_loop(0, const.num_decoy_hosts, check_decoy_host, mask)
 
     return mask
 
 
 def get_red_action_mask(state: CageState, const: CageConst) -> chex.Array:
     """Return valid action mask for red agent."""
-    mask = jnp.ones(NUM_RED_ACTIONS, dtype=jnp.bool_)
-
-    # Sleep always valid
+    action_size = compute_red_action_space_size(const)
+    mask = jnp.ones(action_size, dtype=jnp.bool_)
+    discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
     # DiscoverRemoteSystems: need session in connected subnet
-    for subnet in range(NUM_SUBNETS):
-        # Check if Red has session in any subnet that can reach this one
-        has_access = False
-        for i in range(NUM_HOSTS):
-            host_subnet = HOST_SUBNET[i]
+    def check_discover(subnet, mask):
+        def check_host_access(i, has_access):
+            host_subnet = const.host_subnet[i]
             has_session = state.red_sessions[i] > 0
             can_reach = const.subnet_adjacency[host_subnet, subnet]
-            has_access = has_access | (has_session & can_reach)
-        mask = mask.at[RED_DISCOVER_SUBNET_START + subnet].set(has_access)
+            return has_access | (has_session & can_reach)
+
+        has_access = jax.lax.fori_loop(0, const.num_hosts, check_host_access, False)
+        return mask.at[discover_start + subnet].set(has_access)
+
+    mask = jax.lax.fori_loop(0, const.num_subnets, check_discover, mask)
 
     # DiscoverNetworkServices: need discovered host
-    for i in range(NUM_HOSTS):
+    def check_scan(i, mask):
         scan_valid = state.red_discovered_hosts[i]
-        mask = mask.at[RED_SCAN_HOST_START + i].set(scan_valid)
+        return mask.at[scan_start + i].set(scan_valid)
+
+    mask = jax.lax.fori_loop(0, const.num_hosts, check_scan, mask)
 
     # Exploit: need scanned host
-    for e in range(NUM_EXPLOITS):
-        for i in range(NUM_HOSTS):
-            exploit_action_idx = RED_EXPLOIT_START + e * NUM_HOSTS + i
+    def check_exploit_type(e, mask):
+        def check_exploit_host(i, mask):
+            exploit_action_idx = exploit_start + e * const.num_hosts + i
             exploit_valid = state.red_scanned_hosts[i]
-            mask = mask.at[exploit_action_idx].set(exploit_valid)
+            return mask.at[exploit_action_idx].set(exploit_valid)
+
+        return jax.lax.fori_loop(0, const.num_hosts, check_exploit_host, mask)
+
+    mask = jax.lax.fori_loop(0, const.num_exploits, check_exploit_type, mask)
 
     # PrivilegeEscalate: need user session
-    for i in range(NUM_HOSTS):
+    def check_privesc(i, mask):
         privesc_valid = state.red_privilege[i] >= COMPROMISE_USER
-        mask = mask.at[RED_PRIVESC_START + i].set(privesc_valid)
+        return mask.at[privesc_start + i].set(privesc_valid)
+
+    mask = jax.lax.fori_loop(0, const.num_hosts, check_privesc, mask)
 
     # Impact: need privileged session
-    for i in range(NUM_HOSTS):
+    def check_impact(i, mask):
         impact_valid = state.red_privilege[i] >= COMPROMISE_PRIVILEGED
-        mask = mask.at[RED_IMPACT_START + i].set(impact_valid)
+        return mask.at[impact_start + i].set(impact_valid)
+
+    mask = jax.lax.fori_loop(0, const.num_hosts, check_impact, mask)
 
     return mask

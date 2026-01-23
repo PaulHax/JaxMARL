@@ -1,9 +1,20 @@
 """Pytest configuration for CAGE-JAX tests."""
 
-import sys
-from pathlib import Path
+import pytest
 
-# Add CybORG to path for equivalence tests
-CYBORG_PATH = Path('/home/paulhax/src/cyber/cage-challenge-2/CybORG')
-if CYBORG_PATH.exists():
-    sys.path.insert(0, str(CYBORG_PATH))
+
+def pytest_configure(config):
+    """Register custom markers."""
+    config.addinivalue_line(
+        "markers", "cyborg: tests that require CybORG to be installed"
+    )
+
+
+@pytest.fixture
+def cyborg_available():
+    """Check if CybORG is available."""
+    try:
+        from CybORG import CybORG
+        return True
+    except ImportError:
+        return False
