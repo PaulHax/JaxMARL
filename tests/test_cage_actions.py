@@ -13,7 +13,7 @@ from jaxmarl.environments.cage.actions import (
     apply_blue_action, apply_red_action,
     get_blue_action_mask, get_red_action_mask,
     decode_blue_action, decode_red_action,
-    BLUE_SLEEP, BLUE_MONITOR, BLUE_ANALYSE, BLUE_REMOVE_START, BLUE_RESTORE_START,
+    BLUE_SLEEP, BLUE_MONITOR, BLUE_ANALYSE_START, BLUE_REMOVE_START, BLUE_RESTORE_START,
     BLUE_DECOY_START, NUM_BLUE_ACTIONS,
     RED_SLEEP, RED_DISCOVER_SUBNET_START, RED_SCAN_HOST_START, RED_EXPLOIT_START,
     RED_PRIVESC_START, RED_IMPACT_START, NUM_RED_ACTIONS,

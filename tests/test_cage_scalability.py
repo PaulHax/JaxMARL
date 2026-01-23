@@ -231,8 +231,8 @@ class TestActionSpaceScaling:
             config = SCENARIOS[scenario]()
             const = build_const_from_config(config)
 
-            # 3 base + num_hosts remove + num_hosts restore + num_decoy_hosts * num_decoys
-            expected = 3 + const.num_hosts + const.num_hosts + const.num_decoy_hosts * const.num_decoys
+            # sleep + monitor + analyse_per_host + remove_per_host + restore_per_host + decoy_per_decoy_host
+            expected = 2 + const.num_hosts + const.num_hosts + const.num_hosts + const.num_decoy_hosts * const.num_decoys
             actual = compute_blue_action_space_size(const)
 
             assert actual == expected, f"{scenario}: expected {expected}, got {actual}"

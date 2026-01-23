@@ -1,6 +1,13 @@
 """CAGE-JAX: JAX implementation of CAGE Challenge 2 environment."""
 
 from jaxmarl.environments.cage.cage_env import CageEnv, make_cage_env
+from jaxmarl.environments.cage.scripted_agents import (
+    BLineState,
+    bline_reset,
+    bline_get_action,
+    bline_reset_batched,
+    bline_get_action_batched,
+)
 from jaxmarl.environments.cage.config import (
     ScenarioConfig,
     HostConfig,
@@ -47,6 +54,12 @@ __all__ = [
     # Environment
     'CageEnv',
     'make_cage_env',
+    # Scripted agents
+    'BLineState',
+    'bline_reset',
+    'bline_get_action',
+    'bline_reset_batched',
+    'bline_get_action_batched',
     # Configuration
     'ScenarioConfig',
     'HostConfig',

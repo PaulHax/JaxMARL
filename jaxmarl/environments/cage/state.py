@@ -129,7 +129,7 @@ class CageConst:
     num_services: int = NUM_SERVICES
     num_exploits: int = NUM_EXPLOITS
     num_decoys: int = NUM_DECOY_TYPES
-    num_decoy_hosts: int = 8
+    num_decoy_hosts: int = 13  # All hosts can have decoys (matching CybORG)
     num_red_agents: int = 1
     num_blue_agents: int = 1
 

@@ -141,12 +141,8 @@ class ScenarioConfig:
 
     @property
     def decoy_host_indices(self) -> List[int]:
-        """Get indices of hosts that can have decoys (Enterprise and Operational)."""
-        indices = []
-        for i, h in enumerate(self.hosts):
-            if h.subnet in ('Enterprise', 'Operational'):
-                indices.append(i)
-        return indices
+        """Get indices of hosts that can have decoys (all hosts, matching CybORG)."""
+        return list(range(len(self.hosts)))
 
     @property
     def operational_target_indices(self) -> List[int]:
