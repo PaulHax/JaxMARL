@@ -14,7 +14,8 @@ Each run creates an experiment directory with:
 Usage:
     python scripts/train_cage_vs_bline.py
     python scripts/train_cage_vs_bline.py --seed 42 --total_timesteps 1000000
-    python scripts/train_cage_vs_bline.py --experiment_dir my_experiments
+    python scripts/train_cage_vs_bline.py --wandb_mode online  # upload to wandb cloud
+    python scripts/train_cage_vs_bline.py --wandb_mode disabled  # no wandb
 """
 
 import argparse
@@ -27,6 +28,7 @@ from functools import partial
 from pathlib import Path
 
 import jax
+import wandb
 import jax.numpy as jnp
 import optax
 from flax import linen as nn
@@ -274,16 +276,25 @@ python scripts/train_cage_vs_bline.py \\
   --rollout_steps {args.rollout_steps} \\
   --ppo_epochs {args.ppo_epochs} \\
   --lr {args.lr} \\
-  --experiment_dir {args.experiment_dir}
+  --experiment_dir {args.experiment_dir} \\
+  --wandb_mode {args.wandb_mode}
 """
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
+
+    wandb.init(
+        project="cage-jax",
+        name=exp_name,
+        config=config,
+        mode=args.wandb_mode,
+        dir=str(exp_dir),
+    )
 
     return exp_dir, config
 
 
 class MetricsLogger:
-    """Simple JSONL metrics logger."""
+    """Logs to both JSONL file and wandb."""
 
     def __init__(self, filepath):
         self.filepath = Path(filepath)
@@ -292,9 +303,12 @@ class MetricsLogger:
     def log(self, metrics: dict):
         self.file.write(json.dumps(metrics) + "\n")
         self.file.flush()
+        if "final" not in metrics:
+            wandb.log(metrics)
 
     def close(self):
         self.file.close()
+        wandb.finish()
 
 
 def train(args):
@@ -416,6 +430,9 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--experiment_dir", type=str, default="experiments",
                         help="Base directory for experiment outputs")
+    parser.add_argument("--wandb_mode", type=str, default="offline",
+                        choices=["online", "offline", "disabled"],
+                        help="Wandb mode: online (cloud), offline (local), disabled")
     args = parser.parse_args()
 
     train(args)
