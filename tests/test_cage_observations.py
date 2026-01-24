@@ -55,15 +55,26 @@ class TestBlueObservation:
         assert jnp.all(obs == 0.0)
 
     def test_compromised_host_visible(self, foothold_state, const):
-        """Compromised host should be visible in blue observation."""
+        """Compromised host should be visible in blue observation.
+
+        CybORG encoding: [activity_0, activity_1, compromised_0, compromised_1]
+        For User-level compromise with session:
+        - activity_0 = 1 (has session)
+        - activity_1 = 1 (has session)
+        - compromised_0 = 0 (not privileged)
+        - compromised_1 = 1 (user or privileged)
+        """
         obs = get_blue_obs(foothold_state, const)
 
         user0_idx = HOST_IDS['User0'] * BLUE_OBS_PER_HOST
-        assert obs[user0_idx + 2] == 1.0  # user_compromised
-        assert obs[user0_idx + 3] == 0.0  # not privileged
+        assert obs[user0_idx + 2] == 0.0  # compromised_0: not privileged
+        assert obs[user0_idx + 3] == 1.0  # compromised_1: user or privileged
 
     def test_privileged_access_visible(self, foothold_state, const):
-        """Privileged access should set both user and privileged flags."""
+        """Privileged access should set both compromise flags.
+
+        CybORG encoding: compromised_0=1 (privileged), compromised_1=1 (user or priv)
+        """
         state = foothold_state.replace(
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
         )
@@ -71,8 +82,8 @@ class TestBlueObservation:
         obs = get_blue_obs(state, const)
 
         ent0_idx = HOST_IDS['Enterprise0'] * BLUE_OBS_PER_HOST
-        assert obs[ent0_idx + 2] == 1.0  # user_compromised (privileged implies user)
-        assert obs[ent0_idx + 3] == 1.0  # privileged_compromised
+        assert obs[ent0_idx + 2] == 1.0  # compromised_0: privileged
+        assert obs[ent0_idx + 3] == 1.0  # compromised_1: user or privileged
 
     def test_detection_reflects_red_activity(self, foothold_state, const):
         """Detection features should reflect red activity."""

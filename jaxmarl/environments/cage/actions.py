@@ -19,19 +19,22 @@ NUM_SERVICES = 10
 NUM_EXPLOITS = 8
 
 # Blue action encoding for default scenario (matching CybORG exactly)
+# CybORG order: Sleep, Monitor, Analyse(13), Remove(13), Decoy(8×13), Restore(13)
 BLUE_SLEEP = 0
 BLUE_MONITOR = 1
 BLUE_ANALYSE_START = 2
 BLUE_REMOVE_START = BLUE_ANALYSE_START + NUM_HOSTS  # 15
-BLUE_RESTORE_START = BLUE_REMOVE_START + NUM_HOSTS  # 28
-BLUE_DECOY_START = BLUE_RESTORE_START + NUM_HOSTS  # 41
+BLUE_DECOY_START = BLUE_REMOVE_START + NUM_HOSTS  # 28
 
 # All hosts can have decoys (matching CybORG)
 DECOY_HOSTS = jnp.arange(0, NUM_HOSTS)
 NUM_DECOY_HOSTS = NUM_HOSTS
 
-# Total: 1 + 1 + 13 + 13 + 13 + 13*8 = 145 (matches CybORG)
-NUM_BLUE_ACTIONS = 2 + NUM_HOSTS + NUM_HOSTS + NUM_HOSTS + NUM_DECOY_HOSTS * NUM_DECOY_TYPES
+# Restore comes AFTER decoys to match CybORG action order
+BLUE_RESTORE_START = BLUE_DECOY_START + NUM_DECOY_HOSTS * NUM_DECOY_TYPES  # 132
+
+# Total: 1 + 1 + 13 + 13 + (13*8) + 13 = 145 (matches CybORG)
+NUM_BLUE_ACTIONS = 2 + NUM_HOSTS + NUM_HOSTS + NUM_DECOY_HOSTS * NUM_DECOY_TYPES + NUM_HOSTS
 
 # Red action encoding for default scenario
 RED_SLEEP = 0
@@ -45,9 +48,12 @@ NUM_RED_ACTIONS = RED_IMPACT_START + NUM_HOSTS  # 147
 
 
 def compute_blue_action_space_size(const: CageConst) -> int:
-    """Compute total blue action space size for given configuration."""
-    # sleep + monitor + analyse per host + remove per host + restore per host + decoy per (host × decoy_type)
-    return 2 + const.num_hosts + const.num_hosts + const.num_hosts + const.num_decoy_hosts * const.num_decoys
+    """Compute total blue action space size for given configuration.
+
+    CybORG order: sleep + monitor + analyse + remove + decoy + restore
+    """
+    # sleep(1) + monitor(1) + analyse(hosts) + remove(hosts) + decoy(hosts × types) + restore(hosts)
+    return 2 + const.num_hosts + const.num_hosts + const.num_decoy_hosts * const.num_decoys + const.num_hosts
 
 
 def compute_red_action_space_size(const: CageConst) -> int:
@@ -59,12 +65,15 @@ def compute_red_action_space_size(const: CageConst) -> int:
 
 
 def get_blue_action_offsets(const: CageConst) -> Tuple[int, int, int, int]:
-    """Get blue action offsets for given configuration."""
+    """Get blue action offsets for given configuration.
+
+    CybORG action order: Sleep, Monitor, Analyse, Remove, Decoy, Restore
+    """
     analyse_start = 2
     remove_start = analyse_start + const.num_hosts
-    restore_start = remove_start + const.num_hosts
-    decoy_start = restore_start + const.num_hosts
-    return analyse_start, remove_start, restore_start, decoy_start
+    decoy_start = remove_start + const.num_hosts
+    restore_start = decoy_start + const.num_decoy_hosts * const.num_decoys
+    return analyse_start, remove_start, decoy_start, restore_start
 
 
 def get_red_action_offsets(const: CageConst) -> Tuple[int, int, int, int, int]:
@@ -81,8 +90,9 @@ def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.
     """Decode blue action into (action_type, target_host, decoy_type).
 
     Action types: 0=Sleep, 1=Monitor, 2=Analyse, 3=Remove, 4=Restore, 5=Decoy
+    CybORG action order: Sleep, Monitor, Analyse, Remove, Decoy, Restore
     """
-    analyse_start, remove_start, restore_start, decoy_start = get_blue_action_offsets(const)
+    analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)
 
     action_type = jnp.where(
         action < analyse_start,
@@ -91,12 +101,12 @@ def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.
             action < remove_start,
             2,  # Analyse
             jnp.where(
-                action < restore_start,
+                action < decoy_start,
                 3,  # Remove
                 jnp.where(
-                    action < decoy_start,
-                    4,  # Restore
+                    action < restore_start,
                     5,  # Decoy
+                    4,  # Restore
                 )
             )
         )
@@ -109,19 +119,19 @@ def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.
             action < remove_start,
             action - analyse_start,  # Analyse target
             jnp.where(
-                action < restore_start,
+                action < decoy_start,
                 action - remove_start,  # Remove target
                 jnp.where(
-                    action < decoy_start,
-                    action - restore_start,  # Restore target
+                    action < restore_start,
                     const.decoy_host_indices[(action - decoy_start) // const.num_decoys],  # Decoy target
+                    action - restore_start,  # Restore target
                 )
             )
         )
     )
 
     decoy_type = jnp.where(
-        action >= decoy_start,
+        (action >= decoy_start) & (action < restore_start),
         (action - decoy_start) % const.num_decoys,
         -1,
     )
@@ -421,7 +431,7 @@ def get_blue_action_mask(state: CageState, const: CageConst) -> chex.Array:
     """Return valid action mask for blue agent."""
     action_size = compute_blue_action_space_size(const)
     mask = jnp.ones(action_size, dtype=jnp.bool_)
-    analyse_start, remove_start, restore_start, decoy_start = get_blue_action_offsets(const)
+    analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)
 
     # Remove only valid if host is compromised
     def check_remove(i, mask):

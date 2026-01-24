@@ -30,21 +30,29 @@ def compute_red_obs_dim(const: CageConst) -> int:
 
 
 def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
-    """Get Blue agent observation.
+    """Get Blue agent observation matching CybORG's encoding.
+
+    CybORG encoding per host (4 values):
+        Activity:    None=[0,0], Scan=[1,0], Exploit=[1,1]
+        Compromised: No=[0,0],   User=[0,1], Priv=[1,1]
 
     Returns:
         Array of shape (num_hosts * 4,) with per-host features:
-        - scan_detected: activity indicator
-        - exploit_detected: activity indicator
-        - user_compromised: host has user-level compromise
-        - privileged_compromised: host has privileged compromise
+        [activity_0, activity_1, compromised_0, compromised_1]
     """
-    scan_detected = (state.red_scanned_hosts).astype(jnp.float32)
-    exploit_detected = (state.red_sessions > 0).astype(jnp.float32)
-    user_compromised = (state.host_compromised >= COMPROMISE_USER).astype(jnp.float32)
-    privileged_compromised = (state.host_compromised >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
+    # Activity encoding: None=[0,0], Scan=[1,0], Exploit=[1,1]
+    # activity_0 = 1 if scanned OR has red session (exploit implies scan)
+    # activity_1 = 1 if has red session (exploit detected)
+    activity_0 = (state.red_scanned_hosts | (state.red_sessions > 0)).astype(jnp.float32)
+    activity_1 = (state.red_sessions > 0).astype(jnp.float32)
 
-    obs = jnp.stack([scan_detected, exploit_detected, user_compromised, privileged_compromised], axis=1)
+    # Compromised encoding: No=[0,0], User=[0,1], Priv=[1,1]
+    # compromised_0 = 1 if privileged
+    # compromised_1 = 1 if user OR privileged
+    compromised_0 = (state.host_compromised >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
+    compromised_1 = (state.host_compromised >= COMPROMISE_USER).astype(jnp.float32)
+
+    obs = jnp.stack([activity_0, activity_1, compromised_0, compromised_1], axis=1)
     return obs.flatten()
 
 

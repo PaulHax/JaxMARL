@@ -14,17 +14,17 @@ from jaxmarl.environments.cage.state import CageConst
 from jaxmarl.environments.cage.actions import get_red_action_offsets
 
 
-# B_lineAgent target hosts for Scenario2 (matching CybORG)
-# Host indices: User0=0, User1=1, User2=2, User3=3, User4=4
-#              Enterprise0=5, Enterprise1=6, Enterprise2=7, Defender=8
-#              Op_Host0=9, Op_Host1=10, Op_Host2=11, Op_Server0=12
+# B_lineAgent target hosts for Scenario2 (matching CybORG alphabetical order)
+# Host indices (alphabetical): Defender=0, Enterprise0=1, Enterprise1=2, Enterprise2=3,
+#              Op_Host0=4, Op_Host1=5, Op_Host2=6, Op_Server0=7,
+#              User0=8, User1=9, User2=10, User3=11, User4=12
 BLINE_USER_SUBNET = 0
 BLINE_ENTERPRISE_SUBNET = 1
 BLINE_OPERATIONAL_SUBNET = 2
-BLINE_USER_HOST = 1  # User1 - initial target in User subnet
-BLINE_ENTERPRISE0 = 5
-BLINE_ENTERPRISE2 = 7
-BLINE_OP_SERVER0 = 12
+BLINE_USER_HOST = 9   # User1 - initial target in User subnet
+BLINE_ENTERPRISE0 = 1
+BLINE_ENTERPRISE2 = 3
+BLINE_OP_SERVER0 = 7
 
 # Jump-back table: on failure at state i, jump to state BLINE_JUMP_BACK[i]
 # FSM has 16 states (0-15) with DiscoverSubnet calls inserted

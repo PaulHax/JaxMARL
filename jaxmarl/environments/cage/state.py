@@ -16,11 +16,11 @@ NUM_EXPLOITS = 8
 NUM_DECOY_TYPES = 8
 MAX_PROCESSES = 20
 
-# Host IDs (Scenario 2) - for backward compatibility
+# Host IDs (Scenario 2) - alphabetical order to match CybORG
 HOST_IDS = {
-    'User0': 0, 'User1': 1, 'User2': 2, 'User3': 3, 'User4': 4,
-    'Enterprise0': 5, 'Enterprise1': 6, 'Enterprise2': 7, 'Defender': 8,
-    'Op_Host0': 9, 'Op_Host1': 10, 'Op_Host2': 11, 'Op_Server0': 12
+    'Defender': 0, 'Enterprise0': 1, 'Enterprise1': 2, 'Enterprise2': 3,
+    'Op_Host0': 4, 'Op_Host1': 5, 'Op_Host2': 6, 'Op_Server0': 7,
+    'User0': 8, 'User1': 9, 'User2': 10, 'User3': 11, 'User4': 12,
 }
 
 # Reverse lookup
@@ -29,11 +29,12 @@ HOST_NAMES = {v: k for k, v in HOST_IDS.items()}
 # Subnet IDs
 SUBNET_IDS = {'User': 0, 'Enterprise': 1, 'Operational': 2}
 
-# Host to subnet mapping
+# Host to subnet mapping (matching alphabetical host order)
 HOST_SUBNET = jnp.array([
+    1,              # Defender -> Enterprise subnet
+    1, 1, 1,        # Enterprise0-2 -> Enterprise subnet
+    2, 2, 2, 2,     # Op_Host0-2, Op_Server0 -> Operational subnet
     0, 0, 0, 0, 0,  # User0-4 -> User subnet
-    1, 1, 1, 1,      # Enterprise0-2, Defender -> Enterprise subnet
-    2, 2, 2, 2       # Op_Host0-2, Op_Server0 -> Operational subnet
 ], dtype=jnp.int32)
 
 # Service IDs
@@ -49,10 +50,10 @@ EXPLOIT_IDS = {
     'EternalBlue': 6, 'BlueKeep': 7
 }
 
-# Decoy types (same as services for simplicity)
+# Decoy types (alphabetical order to match CybORG)
 DECOY_IDS = {
-    'DecoyApache': 0, 'DecoyTomcat': 1, 'DecoySSHD': 2, 'DecoyFemitter': 3,
-    'DecoyHarakaSMPT': 4, 'DecoySvchost': 5, 'DecoySmss': 6, 'DecoyVsftpd': 7
+    'DecoyApache': 0, 'DecoyFemitter': 1, 'DecoyHarakaSMPT': 2, 'DecoySmss': 3,
+    'DecoySSHD': 4, 'DecoySvchost': 5, 'DecoyTomcat': 6, 'DecoyVsftpd': 7,
 }
 
 # Compromise levels

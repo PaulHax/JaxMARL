@@ -56,8 +56,8 @@ class ScenarioConfig:
         'HarakaRCE', 'SQLInjection', 'EternalBlue', 'BlueKeep'
     ])
     decoy_types: List[str] = field(default_factory=lambda: [
-        'DecoyApache', 'DecoyTomcat', 'DecoySSHD', 'DecoyFemitter',
-        'DecoyHarakaSMPT', 'DecoySvchost', 'DecoySmss', 'DecoyVsftpd'
+        'DecoyApache', 'DecoyFemitter', 'DecoyHarakaSMPT', 'DecoySmss',
+        'DecoySSHD', 'DecoySvchost', 'DecoyTomcat', 'DecoyVsftpd'
     ])
 
     # Service-exploit vulnerability mapping (service_idx -> list of exploit_idx)
@@ -151,24 +151,25 @@ class ScenarioConfig:
 
 
 def create_scenario2_config() -> ScenarioConfig:
-    """Create CAGE Challenge 2 Scenario 2 configuration."""
+    """Create CAGE Challenge 2 Scenario 2 configuration.
+
+    Hosts are ordered alphabetically to match CybORG's BlueTableWrapper.
+    """
     hosts = [
-        # User subnet (5 hosts)
+        # Alphabetical order to match CybORG
+        HostConfig('Defender', 'Enterprise', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
+        HostConfig('Enterprise0', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'http']),
+        HostConfig('Enterprise1', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb']),
+        HostConfig('Enterprise2', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'tomcat']),
+        HostConfig('Op_Host0', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
+        HostConfig('Op_Host1', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
+        HostConfig('Op_Host2', 'Operational', 'windows', confidentiality=0.1, availability=0.1, services=['rdp']),
+        HostConfig('Op_Server0', 'Operational', 'windows', confidentiality=1.0, availability=10.0, services=['ssh', 'http'], is_operational_target=True),
         HostConfig('User0', 'User', 'linux', confidentiality=0.0, availability=0.0, services=['ssh']),
         HostConfig('User1', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
         HostConfig('User2', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
         HostConfig('User3', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
         HostConfig('User4', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
-        # Enterprise subnet (4 hosts including Defender)
-        HostConfig('Enterprise0', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'http']),
-        HostConfig('Enterprise1', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb']),
-        HostConfig('Enterprise2', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'tomcat']),
-        HostConfig('Defender', 'Enterprise', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        # Operational subnet (4 hosts)
-        HostConfig('Op_Host0', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Op_Host1', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Op_Host2', 'Operational', 'windows', confidentiality=0.1, availability=0.1, services=['rdp']),
-        HostConfig('Op_Server0', 'Operational', 'windows', confidentiality=1.0, availability=10.0, services=['ssh', 'http'], is_operational_target=True),
     ]
 
     subnets = [

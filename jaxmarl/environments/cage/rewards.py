@@ -48,11 +48,13 @@ def compute_rewards(
     blue_reward = -red_reward
 
     # Blue action costs
-    from jaxmarl.environments.cage.actions import get_blue_action_offsets
+    from jaxmarl.environments.cage.actions import get_blue_action_offsets, compute_blue_action_space_size
 
-    analyse_start, remove_start, restore_start, decoy_start = get_blue_action_offsets(const)
+    analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)
+    action_space_size = compute_blue_action_space_size(const)
 
-    is_restore = (blue_action >= restore_start) & (blue_action < decoy_start)
+    # Restore actions are at the end: [restore_start, action_space_size)
+    is_restore = (blue_action >= restore_start) & (blue_action < action_space_size)
     blue_reward = blue_reward + jnp.where(is_restore, BLUE_RESTORE_COST, 0.0)
 
     return {
