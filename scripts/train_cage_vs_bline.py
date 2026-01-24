@@ -4,14 +4,25 @@
 This script trains a Blue agent against the deterministic B_lineAgent,
 matching the training setup from the cage-2 fork for reproducibility.
 
+Each run creates an experiment directory with:
+  - config.json: All hyperparameters and settings
+  - metrics.jsonl: Per-update training metrics
+  - checkpoint_final.pkl: Trained model weights
+  - reproduce.sh: Script to reproduce the experiment
+  - environment.txt: JAX version and device info
+
 Usage:
     python scripts/train_cage_vs_bline.py
-    python scripts/train_cage_vs_bline.py --total_timesteps 5000000 --save_path checkpoints/blue_vs_bline.pkl
+    python scripts/train_cage_vs_bline.py --seed 42 --total_timesteps 1000000
+    python scripts/train_cage_vs_bline.py --experiment_dir my_experiments
 """
 
 import argparse
+import json
+import subprocess
 import time
 import pickle
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -191,15 +202,113 @@ def save_policy(params, filepath):
     print(f"Saved policy to {filepath}")
 
 
+def get_git_commit():
+    """Get current git commit hash, or None if not in a git repo."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.stdout.strip()[:8] if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def setup_experiment(args):
+    """Create experiment directory and save config."""
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    exp_name = f"{timestamp}_blue-vs-bline_seed{args.seed}"
+    exp_dir = Path(args.experiment_dir) / exp_name
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    git_commit = get_git_commit()
+
+    config = {
+        "experiment_name": exp_name,
+        "seed": args.seed,
+        "timestamp": datetime.now().isoformat(),
+        "git_commit": git_commit,
+        "hyperparameters": {
+            "num_envs": args.num_envs,
+            "total_timesteps": args.total_timesteps,
+            "rollout_steps": args.rollout_steps,
+            "ppo_epochs": args.ppo_epochs,
+            "lr": args.lr,
+            "gamma": 0.99,
+            "gae_lambda": 0.95,
+            "clip_eps": 0.2,
+        },
+        "environment": {
+            "scenario": "scenario2",
+            "max_steps": 100,
+            "red_agent": "bline",
+        },
+        "network": {
+            "hidden_dims": [128, 128],
+            "activation": "relu",
+        },
+    }
+
+    with open(exp_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    env_info = [
+        f"jax_version: {jax.__version__}",
+        f"devices: {[str(d) for d in jax.devices()]}",
+        f"platform: {jax.default_backend()}",
+    ]
+    with open(exp_dir / "environment.txt", "w") as f:
+        f.write("\n".join(env_info))
+
+    reproduce_script = f"""#!/bin/bash
+# Reproduce experiment: {exp_name}
+# Generated: {datetime.now().isoformat()}
+
+cd {Path(__file__).parent.parent.resolve()}
+{f'git checkout {git_commit}' if git_commit else '# no git commit recorded'}
+
+python scripts/train_cage_vs_bline.py \\
+  --seed {args.seed} \\
+  --num_envs {args.num_envs} \\
+  --total_timesteps {args.total_timesteps} \\
+  --rollout_steps {args.rollout_steps} \\
+  --ppo_epochs {args.ppo_epochs} \\
+  --lr {args.lr} \\
+  --experiment_dir {args.experiment_dir}
+"""
+    with open(exp_dir / "reproduce.sh", "w") as f:
+        f.write(reproduce_script)
+
+    return exp_dir, config
+
+
+class MetricsLogger:
+    """Simple JSONL metrics logger."""
+
+    def __init__(self, filepath):
+        self.filepath = Path(filepath)
+        self.file = open(self.filepath, "w")
+
+    def log(self, metrics: dict):
+        self.file.write(json.dumps(metrics) + "\n")
+        self.file.flush()
+
+    def close(self):
+        self.file.close()
+
+
 def train(args):
     """Main training loop."""
+    exp_dir, config = setup_experiment(args)
+    metrics_logger = MetricsLogger(exp_dir / "metrics.jsonl")
+
     print("=" * 60)
     print("CAGE-JAX PPO Training: Blue vs B_lineAgent")
     print("=" * 60)
+    print(f"Experiment dir: {exp_dir}")
     print(f"JAX devices: {jax.devices()}")
     print(f"Num parallel envs: {args.num_envs}")
     print(f"Total timesteps: {args.total_timesteps:,}")
-    print(f"Save path: {args.save_path}")
     print("=" * 60)
 
     key = jax.random.PRNGKey(args.seed)
@@ -256,7 +365,16 @@ def train(args):
             elapsed = time.perf_counter() - start_time
             sps = total_steps / elapsed
 
-            recent_blue = jnp.mean(jnp.array(episode_returns_blue[-100:]))
+            recent_blue = float(jnp.mean(jnp.array(episode_returns_blue[-100:])))
+
+            metrics_logger.log({
+                "update": update + 1,
+                "steps": total_steps,
+                "sps": round(sps),
+                "blue_reward": round(recent_blue, 2),
+                "loss": round(float(loss_blue), 4),
+                "elapsed_sec": round(elapsed, 1),
+            })
 
             print(f"Update {update+1}/{num_updates} | "
                   f"Steps: {total_steps:,} | "
@@ -264,14 +382,26 @@ def train(args):
                   f"Blue Reward: {recent_blue:.1f}")
 
     elapsed = time.perf_counter() - start_time
+
+    final_metrics = {
+        "total_steps": total_steps,
+        "wall_time_sec": round(elapsed, 1),
+        "throughput_sps": round(total_steps / elapsed),
+        "final_blue_reward": round(float(jnp.mean(jnp.array(episode_returns_blue[-100:]))), 2),
+    }
+    metrics_logger.log({"final": final_metrics})
+    metrics_logger.close()
+
     print("\n" + "=" * 60)
     print(f"Training complete!")
     print(f"Total steps: {total_steps:,}")
     print(f"Wall time: {elapsed:.1f}s")
     print(f"Throughput: {total_steps/elapsed:,.0f} steps/sec")
+    print(f"Experiment saved to: {exp_dir}")
     print("=" * 60)
 
-    save_policy(train_state_blue.params, args.save_path)
+    checkpoint_path = exp_dir / "checkpoint_final.pkl"
+    save_policy(train_state_blue.params, checkpoint_path)
 
     return train_state_blue
 
@@ -284,7 +414,8 @@ def main():
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--save_path", type=str, default="checkpoints/blue_vs_bline.pkl")
+    parser.add_argument("--experiment_dir", type=str, default="experiments",
+                        help="Base directory for experiment outputs")
     args = parser.parse_args()
 
     train(args)
