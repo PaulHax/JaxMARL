@@ -8,7 +8,7 @@ from jaxmarl.environments.cage.state import (
     CageState, CageConst,
     create_scenario2_const, create_initial_state, create_initial_state_with_red_foothold,
     NUM_HOSTS, NUM_SERVICES, NUM_DECOY_TYPES, MAX_PROCESSES, NUM_EXPLOITS,
-    HOST_IDS, COMPROMISE_USER, COMPROMISE_NONE,
+    HOST_IDS, COMPROMISE_USER, COMPROMISE_PRIVILEGED, COMPROMISE_NONE,
 )
 
 
@@ -65,12 +65,16 @@ def test_initial_state_values():
 
 
 def test_initial_state_with_foothold():
-    """Test initial state with Red foothold on User0."""
+    """Test initial state with Red foothold on User0.
+
+    CybORG starts Red with SYSTEM (PRIVILEGED) access on the foothold host.
+    """
     const = create_scenario2_const()
     state = create_initial_state_with_red_foothold(const)
 
-    # User0 should be compromised
-    assert state.host_compromised[HOST_IDS['User0']] == COMPROMISE_USER
+    # User0 should be compromised at PRIVILEGED level (matches CybORG)
+    assert state.host_compromised[HOST_IDS['User0']] == COMPROMISE_PRIVILEGED
+    assert state.red_privilege[HOST_IDS['User0']] == COMPROMISE_PRIVILEGED
 
     # Red should have session on User0
     assert state.red_sessions[HOST_IDS['User0']] == 1

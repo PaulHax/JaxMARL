@@ -24,16 +24,6 @@ from jaxmarl.environments.cage.actions import (
 )
 
 
-def _cyborg_available():
-    """Check if CybORG is available."""
-    try:
-        from CybORG import CybORG
-        return True
-    except ImportError:
-        return False
-
-
-@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestActionEquivalence:
     """Test each action type produces equivalent state transitions."""
 
@@ -124,7 +114,6 @@ class TestActionEquivalence:
         assert jax_state.red_scanned_hosts[HOST_IDS['User0']]
 
 
-@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestTrajectoryEquivalence:
     """Run identical action sequences and compare step-by-step."""
 
@@ -218,7 +207,6 @@ class TestTrajectoryEquivalence:
                 break
 
 
-@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestStatisticalEquivalence:
     """Compare distributions over many episodes."""
 
@@ -302,7 +290,6 @@ class TestStatisticalEquivalence:
         assert std_return > 0, "Should have some variance in returns"
 
 
-@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
 class TestRewardEquivalence:
     """Verify reward calculations match CybORG."""
 
@@ -331,11 +318,12 @@ class TestRewardEquivalence:
 
         const = create_scenario2_const()
 
+        # Confidentiality-only rewards (availability requires Impact)
         expected_rewards = {
             'User0': 0.0,
             'User1': 0.1,
             'Enterprise0': 1.0,
-            'Op_Server0': 11.0,
+            'Op_Server0': 1.0,  # Confidentiality only; availability requires Impact
         }
 
         for hostname, expected in expected_rewards.items():
@@ -348,8 +336,27 @@ class TestRewardEquivalence:
             assert abs(float(rewards['red']) - expected) < 1e-5, \
                 f"{hostname}: expected {expected}, got {rewards['red']}"
 
+    def test_availability_rewards_require_impact(self):
+        """Test that availability reward requires Impact action."""
+        from jaxmarl.environments.cage.rewards import compute_rewards_simple
+        from jaxmarl.environments.cage.state import (
+            create_initial_state, create_scenario2_const, COMPROMISE_PRIVILEGED
+        )
 
-@pytest.mark.skipif(not _cyborg_available(), reason="CybORG not installed")
+        const = create_scenario2_const()
+        state = create_initial_state(const)
+
+        # Op_Server0 with privileged access + Impact
+        state = state.replace(
+            host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            ot_service_stopped=state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
+        )
+        rewards = compute_rewards_simple(state, const)
+
+        # 1.0 confidentiality + 10.0 availability = 11.0
+        assert abs(float(rewards['red']) - 11.0) < 1e-5
+
+
 class TestCybORGDirectComparison:
     """Direct step-by-step comparison with CybORG."""
 

@@ -4,6 +4,10 @@ jaxlib
 chex
 flax
 
+# Training
+optax
+wandb
+
 # Testing
 pytest
 pytest-xdist

@@ -27,21 +27,21 @@ BLINE_ENTERPRISE2 = 3
 BLINE_OP_SERVER0 = 7
 
 # Jump-back table: on failure at state i, jump to state BLINE_JUMP_BACK[i]
-# FSM has 16 states (0-15) with DiscoverSubnet calls inserted
+# FSM has 16 states (0-15) for complete B_lineAgent attack path
 BLINE_JUMP_BACK = jnp.array([
     0,   # State 0:  DiscoverSubnet(User) -> retry
-    1,   # State 1:  ScanHost(User1) -> retry
+    1,   # State 1:  Scan(User1) -> retry
     2,   # State 2:  Exploit(User1) -> retry
     2,   # State 3:  PrivEsc(User1) -> back to exploit
     4,   # State 4:  DiscoverSubnet(Enterprise) -> retry
-    5,   # State 5:  ScanHost(Enterprise0) -> retry
+    5,   # State 5:  Scan(Enterprise0) -> retry
     6,   # State 6:  Exploit(Enterprise0) -> retry
     6,   # State 7:  PrivEsc(Enterprise0) -> back to exploit
-    8,   # State 8:  ScanHost(Enterprise2) -> retry
+    8,   # State 8:  Scan(Enterprise2) -> retry
     9,   # State 9:  Exploit(Enterprise2) -> retry
     9,   # State 10: PrivEsc(Enterprise2) -> back to exploit
     11,  # State 11: DiscoverSubnet(Operational) -> retry
-    12,  # State 12: ScanHost(Op_Server0) -> retry
+    12,  # State 12: Scan(Op_Server0) -> retry
     13,  # State 13: Exploit(Op_Server0) -> retry
     13,  # State 14: PrivEsc(Op_Server0) -> back to exploit
     14,  # State 15: Impact(Op_Server0) -> back to privesc
@@ -152,6 +152,8 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
     - Exploit: exploit_start + exploit_type * num_hosts + host_idx
     - PrivilegeEscalate: privesc_start + host_idx
     - Impact: impact_start + host_idx
+
+    16-state FSM for complete B_lineAgent attack path.
     """
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 

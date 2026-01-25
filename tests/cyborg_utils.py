@@ -65,8 +65,6 @@ def cyborg_state_to_dict(cyborg_env) -> dict:
     - red_sessions: {hostname: session_count}
     - red_privilege: {hostname: privilege_level}
     """
-    true_state = cyborg_env.get_true_state({'Sessions': True})
-
     host_compromised = {}
     red_sessions = {}
     red_privilege = {}
@@ -76,23 +74,26 @@ def cyborg_state_to_dict(cyborg_env) -> dict:
         red_sessions[hostname] = 0
         red_privilege[hostname] = COMPROMISE_NONE
 
-    if 'Red' in true_state:
-        for session_info in true_state.get('Red', {}).get('Sessions', []):
-            if isinstance(session_info, dict):
-                hostname = session_info.get('Hostname', session_info.get('hostname'))
-                if hostname and hostname in HOST_IDS:
-                    red_sessions[hostname] = red_sessions.get(hostname, 0) + 1
+    red_state = cyborg_env.get_agent_state('Red')
 
-                    agent = session_info.get('Agent', session_info.get('agent'))
-                    username = session_info.get('Username', session_info.get('username', ''))
+    for hostname in HOST_IDS.keys():
+        if hostname in red_state:
+            host_info = red_state[hostname]
+            sessions = host_info.get('Sessions', [])
+            for session_info in sessions:
+                if isinstance(session_info, dict):
+                    agent = session_info.get('Agent', session_info.get('agent', ''))
+                    if agent == 'Red':
+                        red_sessions[hostname] = red_sessions.get(hostname, 0) + 1
+                        username = session_info.get('Username', session_info.get('username', ''))
 
-                    if username in ['root', 'SYSTEM']:
-                        red_privilege[hostname] = COMPROMISE_PRIVILEGED
-                        host_compromised[hostname] = COMPROMISE_PRIVILEGED
-                    elif red_privilege[hostname] < COMPROMISE_USER:
-                        red_privilege[hostname] = COMPROMISE_USER
-                        if host_compromised[hostname] < COMPROMISE_USER:
-                            host_compromised[hostname] = COMPROMISE_USER
+                        if username in ['root', 'SYSTEM']:
+                            red_privilege[hostname] = COMPROMISE_PRIVILEGED
+                            host_compromised[hostname] = COMPROMISE_PRIVILEGED
+                        elif red_privilege[hostname] < COMPROMISE_USER:
+                            red_privilege[hostname] = COMPROMISE_USER
+                            if host_compromised[hostname] < COMPROMISE_USER:
+                                host_compromised[hostname] = COMPROMISE_USER
 
     return {
         'host_compromised': host_compromised,
@@ -215,8 +216,6 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env):
     from CybORG.Shared.Actions import (
         Sleep, DiscoverRemoteSystems, DiscoverNetworkServices,
         ExploitRemoteService, PrivilegeEscalate, Impact,
-    )
-    from CybORG.Shared.Actions.ConcreteActions.ExploitActions import (
         SSHBruteForce, FTPDirectoryTraversal, HTTPRFI, HTTPSRFI,
         HarakaRCE, SQLInjection, EternalBlue, BlueKeep,
     )
@@ -250,7 +249,7 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env):
 
         if exploit_idx < len(EXPLOIT_CLASSES):
             exploit_class = EXPLOIT_CLASSES[exploit_idx]
-            return exploit_class(session=0, agent='Red', ip_address=ip)
+            return exploit_class(ip_address=ip, agent='Red', session=0, target_session=0)
         return Sleep()
 
     if RED_PRIVESC_START <= action_idx < RED_IMPACT_START:

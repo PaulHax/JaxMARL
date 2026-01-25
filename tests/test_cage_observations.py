@@ -55,28 +55,34 @@ class TestBlueObservation:
         assert jnp.all(obs == 0.0)
 
     def test_compromised_host_visible(self, foothold_state, const):
-        """Compromised host should be visible in blue observation.
+        """Compromised host should be visible in blue observation when detected.
 
         CybORG encoding: [activity_0, activity_1, compromised_0, compromised_1]
-        For User-level compromise with session:
-        - activity_0 = 1 (has session)
-        - activity_1 = 1 (has session)
-        - compromised_0 = 0 (not privileged)
+        For PRIVILEGED compromise with session (after detection):
+        - activity_0 = 1 (detected)
+        - activity_1 = 1 (has session and detected)
+        - compromised_0 = 1 (privileged)
         - compromised_1 = 1 (user or privileged)
+
+        Note: CybORG starts Red with PRIVILEGED (SYSTEM) access on foothold.
         """
-        obs = get_blue_obs(foothold_state, const)
+        state = foothold_state.replace(
+            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['User0']].set(True),
+        )
+        obs = get_blue_obs(state, const)
 
         user0_idx = HOST_IDS['User0'] * BLUE_OBS_PER_HOST
-        assert obs[user0_idx + 2] == 0.0  # compromised_0: not privileged
+        assert obs[user0_idx + 2] == 1.0  # compromised_0: privileged
         assert obs[user0_idx + 3] == 1.0  # compromised_1: user or privileged
 
     def test_privileged_access_visible(self, foothold_state, const):
-        """Privileged access should set both compromise flags.
+        """Privileged access should set both compromise flags when detected.
 
         CybORG encoding: compromised_0=1 (privileged), compromised_1=1 (user or priv)
         """
         state = foothold_state.replace(
-            host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         obs = get_blue_obs(state, const)
@@ -86,10 +92,11 @@ class TestBlueObservation:
         assert obs[ent0_idx + 3] == 1.0  # compromised_1: user or privileged
 
     def test_detection_reflects_red_activity(self, foothold_state, const):
-        """Detection features should reflect red activity."""
+        """Detection features should reflect red activity when detected."""
         state = foothold_state.replace(
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             red_scanned_hosts=foothold_state.red_scanned_hosts.at[HOST_IDS['Enterprise0']].set(True),
+            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         obs = get_blue_obs(state, const)
@@ -115,13 +122,16 @@ class TestRedObservation:
         assert obs[0] == 1.0  # success flag
 
     def test_foothold_visible(self, foothold_state, const):
-        """Red's foothold should be visible in observation."""
+        """Red's foothold should be visible in observation.
+
+        CybORG starts Red with PRIVILEGED (SYSTEM) access on User0.
+        """
         obs = get_red_obs(foothold_state, const)
 
         user0_idx = 1 + HOST_IDS['User0'] * RED_OBS_PER_HOST
         assert obs[user0_idx + 0] == 1.0  # scanned
         assert obs[user0_idx + 1] == 1.0  # user_access
-        assert obs[user0_idx + 2] == 0.0  # no privileged_access
+        assert obs[user0_idx + 2] == 1.0  # privileged_access (SYSTEM)
 
     def test_privileged_access_visible(self, foothold_state, const):
         """Privileged access should be visible."""

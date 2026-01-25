@@ -56,9 +56,9 @@ class TestReset:
 
         assert state.time == 0
         assert state.done == False
-        # Red starts with foothold on User0
-        from jaxmarl.environments.cage.state import HOST_IDS, COMPROMISE_USER
-        assert state.host_compromised[HOST_IDS['User0']] == COMPROMISE_USER
+        # Red starts with PRIVILEGED (SYSTEM) foothold on User0 (matches CybORG)
+        from jaxmarl.environments.cage.state import HOST_IDS, COMPROMISE_PRIVILEGED
+        assert state.host_compromised[HOST_IDS['User0']] == COMPROMISE_PRIVILEGED
 
     def test_reset_determinism(self, env):
         key = jax.random.PRNGKey(42)

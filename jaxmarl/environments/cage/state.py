@@ -98,6 +98,15 @@ class CageState:
     # Last action success (for observations)
     last_red_action_success: chex.Array  # scalar bool
 
+    # Impact tracking - OT service stopped on operational hosts
+    ot_service_stopped: chex.Array     # (max_hosts,) bool: OT service stopped by Impact
+
+    # Activity detection - tracks if suspicious activity was detected (for Remove)
+    host_activity_detected: chex.Array  # (max_hosts,) bool: activity detected by Monitor/Analyse
+
+    # Unknown observation state - set after Remove, cleared by Monitor/Analyse
+    host_observation_unknown: chex.Array  # (max_hosts,) bool: observation should show "Unknown"
+
 
 @struct.dataclass
 class CageConst:
@@ -275,11 +284,17 @@ def create_initial_state(const: CageConst) -> CageState:
         cumulative_red_reward=jnp.array(0.0),
         cumulative_blue_reward=jnp.array(0.0),
         last_red_action_success=jnp.array(False),
+        ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 
 
 def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
-    """Create initial state where Red has a foothold on configured start hosts."""
+    """Create initial state where Red has a foothold on configured start hosts.
+
+    CybORG starts Red with SYSTEM/root (PRIVILEGED) access on the foothold host.
+    """
     state = create_initial_state(const)
 
     # Set up red foothold using scatter operations (JAX-compatible)
@@ -287,9 +302,9 @@ def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
     red_start_mask = red_start_mask.at[const.red_start_hosts].set(True)
 
     state = state.replace(
-        host_compromised=jnp.where(red_start_mask, COMPROMISE_USER, state.host_compromised),
+        host_compromised=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.host_compromised),
         red_sessions=jnp.where(red_start_mask, 1, state.red_sessions),
-        red_privilege=jnp.where(red_start_mask, COMPROMISE_USER, state.red_privilege),
+        red_privilege=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.red_privilege),
         red_discovered_hosts=red_start_mask | state.red_discovered_hosts,
         red_scanned_hosts=red_start_mask | state.red_scanned_hosts,
     )

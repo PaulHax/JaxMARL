@@ -50,24 +50,33 @@ from jaxmarl.environments.cage.scripted_agents import (
 class ActorCritic(nn.Module):
     """Simple actor-critic network."""
     action_dim: int
+    hidden_dim: int = 256
+    activation: str = "tanh"
 
     @nn.compact
     def __call__(self, x):
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
-        x = nn.Dense(128)(x)
-        x = nn.relu(x)
+        act_fn = nn.tanh if self.activation == "tanh" else nn.relu
+        x = nn.Dense(self.hidden_dim)(x)
+        x = act_fn(x)
+        x = nn.Dense(self.hidden_dim)(x)
+        x = act_fn(x)
         logits = nn.Dense(self.action_dim)(x)
         value = nn.Dense(1)(x)
         return logits, value.squeeze(-1)
 
 
-def create_train_state(key, obs_dim, action_dim, learning_rate=3e-4):
+def create_train_state(key, obs_dim, action_dim, learning_rate=3e-4, hidden_dim=256, activation="tanh", max_grad_norm=0.5):
     """Create training state for an agent."""
-    network = ActorCritic(action_dim=action_dim)
+    network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation=activation)
     dummy_obs = jnp.zeros((1, obs_dim))
     params = network.init(key, dummy_obs)
-    tx = optax.adam(learning_rate)
+    if max_grad_norm > 0:
+        tx = optax.chain(
+            optax.clip_by_global_norm(max_grad_norm),
+            optax.adam(learning_rate),
+        )
+    else:
+        tx = optax.adam(learning_rate)
     return TrainState.create(apply_fn=network.apply, params=params, tx=tx)
 
 
@@ -130,6 +139,7 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
             'done': dones['__all__'],
             'value_blue': blue_values,
             'logits_blue': blue_logits,
+            'avail_blue': avail['blue'],
         }
 
         return (key, next_states, next_obs, new_bline_states), transition
@@ -164,12 +174,23 @@ def compute_gae(rewards, values, dones, gamma=0.99, gae_lambda=0.95):
     return advantages, returns
 
 
-def ppo_loss(params, apply_fn, obs, actions, old_logits, advantages, returns, clip_eps=0.2):
-    """PPO clipped objective loss."""
+def ppo_loss(params, apply_fn, obs, actions, old_logits, advantages, returns, avail_mask=None, clip_eps=0.2, vf_coef=0.5, ent_coef=0.0):
+    """PPO clipped objective loss with proper action masking.
+
+    Follows SB3's MaskablePPO approach: masked actions don't contribute to entropy.
+    """
     logits, values = apply_fn(params, obs)
 
-    log_probs = jax.nn.log_softmax(logits)
-    old_log_probs = jax.nn.log_softmax(old_logits)
+    # Apply action masking to logits for probability computation
+    if avail_mask is not None:
+        masked_logits = jnp.where(avail_mask, logits, -1e10)
+        masked_old_logits = jnp.where(avail_mask, old_logits, -1e10)
+    else:
+        masked_logits = logits
+        masked_old_logits = old_logits
+
+    log_probs = jax.nn.log_softmax(masked_logits)
+    old_log_probs = jax.nn.log_softmax(masked_old_logits)
 
     action_log_probs = jnp.take_along_axis(log_probs, actions[:, None], axis=1).squeeze()
     old_action_log_probs = jnp.take_along_axis(old_log_probs, actions[:, None], axis=1).squeeze()
@@ -179,17 +200,23 @@ def ppo_loss(params, apply_fn, obs, actions, old_logits, advantages, returns, cl
 
     policy_loss = -jnp.mean(jnp.minimum(ratio * advantages, clipped_ratio * advantages))
     value_loss = jnp.mean((values - returns) ** 2)
-    entropy = -jnp.mean(jnp.sum(jax.nn.softmax(logits) * log_probs, axis=-1))
 
-    return policy_loss + 0.5 * value_loss - 0.01 * entropy
+    # Compute entropy only over valid actions (following MaskablePPO)
+    probs = jax.nn.softmax(masked_logits)
+    p_log_p = probs * log_probs
+    if avail_mask is not None:
+        p_log_p = jnp.where(avail_mask, p_log_p, 0.0)
+    entropy = -jnp.mean(jnp.sum(p_log_p, axis=-1))
+
+    return policy_loss + vf_coef * value_loss - ent_coef * entropy
 
 
-@jax.jit
-def update_agent(train_state, obs, actions, old_logits, advantages, returns):
+def update_agent(train_state, obs, actions, old_logits, advantages, returns, avail_mask=None, ent_coef=0.0):
     """Update agent with PPO."""
     loss, grads = jax.value_and_grad(ppo_loss)(
         train_state.params, train_state.apply_fn,
-        obs, actions, old_logits, advantages, returns
+        obs, actions, old_logits, advantages, returns,
+        avail_mask=avail_mask, ent_coef=ent_coef
     )
     train_state = train_state.apply_gradients(grads=grads)
     return train_state, loss
@@ -202,6 +229,30 @@ def save_policy(params, filepath):
     with open(filepath, 'wb') as f:
         pickle.dump({'params': params}, f)
     print(f"Saved policy to {filepath}")
+
+
+def extract_episode_returns(rewards, dones):
+    """Extract completed episode returns from a rollout.
+
+    Args:
+        rewards: Array of shape (num_steps, num_envs)
+        dones: Array of shape (num_steps, num_envs), True at episode boundaries
+
+    Returns:
+        List of episode returns (one per completed episode in the rollout)
+    """
+    num_steps, num_envs = rewards.shape
+    episode_returns = []
+    current_returns = [0.0] * num_envs
+
+    for t in range(num_steps):
+        for e in range(num_envs):
+            current_returns[e] += float(rewards[t, e])
+            if dones[t, e]:
+                episode_returns.append(current_returns[e])
+                current_returns[e] = 0.0
+
+    return episode_returns
 
 
 def get_git_commit():
@@ -235,10 +286,13 @@ def setup_experiment(args):
             "total_timesteps": args.total_timesteps,
             "rollout_steps": args.rollout_steps,
             "ppo_epochs": args.ppo_epochs,
+            "minibatch_size": args.minibatch_size,
             "lr": args.lr,
             "gamma": 0.99,
             "gae_lambda": 0.95,
             "clip_eps": 0.2,
+            "ent_coef": args.ent_coef,
+            "max_grad_norm": args.max_grad_norm,
         },
         "environment": {
             "scenario": "scenario2",
@@ -246,8 +300,8 @@ def setup_experiment(args):
             "red_agent": "bline",
         },
         "network": {
-            "hidden_dims": [128, 128],
-            "activation": "relu",
+            "hidden_dims": [args.hidden_dim, args.hidden_dim],
+            "activation": args.activation,
         },
     }
 
@@ -275,7 +329,12 @@ python scripts/train_cage_vs_bline.py \\
   --total_timesteps {args.total_timesteps} \\
   --rollout_steps {args.rollout_steps} \\
   --ppo_epochs {args.ppo_epochs} \\
+  --minibatch_size {args.minibatch_size} \\
   --lr {args.lr} \\
+  --ent_coef {args.ent_coef} \\
+  --max_grad_norm {args.max_grad_norm} \\
+  --hidden_dim {args.hidden_dim} \\
+  --activation {args.activation} \\
   --experiment_dir {args.experiment_dir} \\
   --wandb_mode {args.wandb_mode}
 """
@@ -321,15 +380,22 @@ def train(args):
     print("=" * 60)
     print(f"Experiment dir: {exp_dir}")
     print(f"JAX devices: {jax.devices()}")
-    print(f"Num parallel envs: {args.num_envs}")
+    print(f"Num envs: {args.num_envs}, rollout_steps: {args.rollout_steps}")
     print(f"Total timesteps: {args.total_timesteps:,}")
+    print(f"Network: [{args.hidden_dim}, {args.hidden_dim}] {args.activation}")
+    print(f"PPO: epochs={args.ppo_epochs}, minibatch={args.minibatch_size}, ent_coef={args.ent_coef}")
+    print(f"Optimizer: lr={args.lr}, max_grad_norm={args.max_grad_norm}")
     print("=" * 60)
 
     key = jax.random.PRNGKey(args.seed)
     env = CageEnv(max_steps=100)
 
     key, key_blue = jax.random.split(key)
-    train_state_blue = create_train_state(key_blue, BLUE_OBS_DIM, NUM_BLUE_ACTIONS, args.lr)
+    train_state_blue = create_train_state(
+        key_blue, BLUE_OBS_DIM, NUM_BLUE_ACTIONS, args.lr,
+        hidden_dim=args.hidden_dim, activation=args.activation,
+        max_grad_norm=args.max_grad_norm
+    )
 
     # Initialize environments
     key, *env_keys = jax.random.split(key, args.num_envs + 1)
@@ -365,15 +431,41 @@ def train(args):
         obs_blue = transitions['obs_blue'].reshape(batch_size, -1)
         actions_blue = transitions['action_blue'].reshape(batch_size)
         logits_blue = transitions['logits_blue'].reshape(batch_size, -1)
+        avail_blue = transitions['avail_blue'].reshape(batch_size, -1)
         adv_blue_flat = adv_blue.reshape(batch_size)
         ret_blue_flat = ret_blue.reshape(batch_size)
 
-        for _ in range(args.ppo_epochs):
-            train_state_blue, loss_blue = update_agent(
-                train_state_blue, obs_blue, actions_blue, logits_blue, adv_blue_flat, ret_blue_flat
-            )
+        if args.minibatch_size <= 0 or args.minibatch_size >= batch_size:
+            minibatch_size = batch_size
+            num_minibatches = 1
+        else:
+            minibatch_size = args.minibatch_size
+            num_minibatches = batch_size // minibatch_size
 
-        episode_returns_blue.extend(transitions['reward_blue'].sum(axis=0).tolist())
+        for _ in range(args.ppo_epochs):
+            key, key_perm = jax.random.split(key)
+            perm = jax.random.permutation(key_perm, batch_size)
+
+            for mb_idx in range(num_minibatches):
+                mb_start = mb_idx * minibatch_size
+                mb_end = mb_start + minibatch_size
+                mb_indices = perm[mb_start:mb_end]
+
+                train_state_blue, loss_blue = update_agent(
+                    train_state_blue,
+                    obs_blue[mb_indices],
+                    actions_blue[mb_indices],
+                    logits_blue[mb_indices],
+                    adv_blue_flat[mb_indices],
+                    ret_blue_flat[mb_indices],
+                    avail_mask=avail_blue[mb_indices],
+                    ent_coef=args.ent_coef,
+                )
+
+        completed_returns = extract_episode_returns(
+            transitions['reward_blue'], transitions['done']
+        )
+        episode_returns_blue.extend(completed_returns)
 
         if (update + 1) % 10 == 0 or update == 0:
             elapsed = time.perf_counter() - start_time
@@ -422,11 +514,25 @@ def train(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Train Blue agent against B_lineAgent")
-    parser.add_argument("--num_envs", type=int, default=1024)
-    parser.add_argument("--total_timesteps", type=int, default=5_000_000)
-    parser.add_argument("--rollout_steps", type=int, default=128)
-    parser.add_argument("--ppo_epochs", type=int, default=4)
+    parser.add_argument("--num_envs", type=int, default=1,
+                        help="Number of parallel environments (SB3 default: 1)")
+    parser.add_argument("--total_timesteps", type=int, default=3_000_000)
+    parser.add_argument("--rollout_steps", type=int, default=2048,
+                        help="Steps per rollout before PPO update (SB3 default: 2048)")
+    parser.add_argument("--ppo_epochs", type=int, default=10,
+                        help="PPO epochs per update (SB3 default: 10)")
+    parser.add_argument("--minibatch_size", type=int, default=64,
+                        help="Minibatch size for PPO updates (SB3 default: 64, 0 = full batch)")
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--ent_coef", type=float, default=0.0,
+                        help="Entropy coefficient (SB3 default: 0.0)")
+    parser.add_argument("--max_grad_norm", type=float, default=0.5,
+                        help="Max gradient norm for clipping (SB3 default: 0.5, 0 = no clipping)")
+    parser.add_argument("--hidden_dim", type=int, default=256,
+                        help="Hidden layer dimension for actor-critic network")
+    parser.add_argument("--activation", type=str, default="tanh",
+                        choices=["relu", "tanh"],
+                        help="Activation function for actor-critic network")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--experiment_dir", type=str, default="experiments",
                         help="Base directory for experiment outputs")

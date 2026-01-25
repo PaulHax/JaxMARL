@@ -87,9 +87,23 @@ class TestZeroSum:
 
 class TestOpServerReward:
     def test_op_server_availability_reward(self, const, initial_state):
-        """Compromising Op_Server0 with privileged access gives availability reward."""
+        """Availability reward requires Impact action to stop OT service."""
+        # Privileged access alone doesn't give availability reward
         state = initial_state.replace(
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED)
+        )
+
+        rewards = compute_rewards_simple(state, const)
+
+        # Only confidentiality, no availability (Impact not run)
+        expected_red = 1.0 * CONFIDENTIALITY_SCALE
+        assert rewards['red'] == expected_red
+
+    def test_op_server_with_impact(self, const, initial_state):
+        """Availability reward given when Impact stops OT service."""
+        state = initial_state.replace(
+            host_compromised=initial_state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            ot_service_stopped=initial_state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
         )
 
         rewards = compute_rewards_simple(state, const)
@@ -180,19 +194,20 @@ class TestRewardScenarios:
         assert rewards['red'] == 0.0
 
     def test_full_compromise_scenario(self, const, initial_state):
-        """Test reward for realistic attack path: Enterprise + Op_Server (privileged)."""
-        # Red compromises Enterprise0 (privileged) and Op_Server0 (privileged)
+        """Test reward for realistic attack path: Enterprise + Op_Server with Impact."""
+        # Red compromises Enterprise0 (privileged) and Op_Server0 (privileged + Impact)
         state = initial_state.replace(
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
         )
         state = state.replace(
-            host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            ot_service_stopped=state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
         )
 
         rewards = compute_rewards_simple(state, const)
 
-        # Enterprise0: 1.0 (Medium)
-        # Op_Server0: 1.0 (Medium) + 10.0 (High availability) = 11.0
+        # Enterprise0: 1.0 (Medium) confidentiality
+        # Op_Server0: 1.0 (Medium) confidentiality + 10.0 (High) availability = 11.0
         expected_red = 1.0 + 11.0
         assert rewards['red'] == expected_red
 

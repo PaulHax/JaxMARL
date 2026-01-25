@@ -9,6 +9,25 @@ from typing import Dict, List, Optional, Tuple
 import jax.numpy as jnp
 import chex
 
+# OS type constants
+OS_LINUX = 0
+OS_WINDOWS = 1
+OS_ANY = -1  # Compatible with any OS
+
+# Decoy OS restrictions: decoy_idx -> required_os (OS_LINUX, OS_WINDOWS, or OS_ANY)
+# DecoySmss, DecoySvchost, DecoyFemitter = Windows only
+# DecoyVsftpd, DecoyHarakaSMPT = Linux only
+DECOY_OS_RESTRICTIONS = {
+    'DecoyApache': OS_ANY,
+    'DecoyFemitter': OS_WINDOWS,
+    'DecoyHarakaSMPT': OS_LINUX,
+    'DecoySmss': OS_WINDOWS,
+    'DecoySSHD': OS_ANY,
+    'DecoySvchost': OS_WINDOWS,
+    'DecoyTomcat': OS_ANY,
+    'DecoyVsftpd': OS_LINUX,
+}
+
 
 @dataclass
 class HostConfig:

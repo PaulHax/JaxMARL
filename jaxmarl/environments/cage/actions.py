@@ -9,8 +9,16 @@ from typing import Tuple
 from jaxmarl.environments.cage.state import (
     CageState, CageConst,
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
-    EXPLOIT_IDS, NUM_DECOY_TYPES,
+    EXPLOIT_IDS, NUM_DECOY_TYPES, OS_LINUX, OS_WINDOWS, DECOY_IDS,
 )
+from jaxmarl.environments.cage.config import DECOY_OS_RESTRICTIONS, OS_ANY
+
+# Build decoy OS restriction array from config (indexed by decoy type)
+# Value: OS_ANY=-1, OS_LINUX=0, OS_WINDOWS=1
+DECOY_OS_ARRAY = jnp.array([
+    DECOY_OS_RESTRICTIONS.get(name, OS_ANY)
+    for name, idx in sorted(DECOY_IDS.items(), key=lambda x: x[1])
+], dtype=jnp.int32)
 
 # Default action space sizes for backward compatibility (Scenario 2 with 13 hosts)
 NUM_HOSTS = 13
@@ -202,6 +210,22 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     """Apply blue agent action to state."""
     action_type, target_host, decoy_type = decode_blue_action(action, const)
 
+    # Monitor (action_type == 1): detect activity on all hosts, clear unknown flags
+    state = jax.lax.cond(
+        action_type == 1,  # Monitor
+        lambda s: _apply_monitor(s),
+        lambda s: s,
+        state,
+    )
+
+    # Analyse (action_type == 2): detect activity on target host, clear unknown flag
+    state = jax.lax.cond(
+        action_type == 2,  # Analyse
+        lambda s: _apply_analyse(s, target_host),
+        lambda s: s,
+        state,
+    )
+
     state = jax.lax.cond(
         action_type == 3,  # Remove
         lambda s: _apply_remove(s, target_host),
@@ -226,23 +250,104 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     return state
 
 
-def _apply_remove(state: CageState, target_host: int) -> CageState:
-    """Remove action: kill red sessions and clear user-level compromise."""
+def _apply_monitor(state: CageState) -> CageState:
+    """Monitor action: detect red activity on all hosts, clear unknown flags."""
+    # Detect activity where red has sessions or hosts are compromised
+    activity = (state.red_sessions > 0) | (state.host_compromised > 0)
     return state.replace(
-        host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_NONE),
-        red_sessions=state.red_sessions.at[target_host].set(0),
-        red_privilege=state.red_privilege.at[target_host].set(COMPROMISE_NONE),
+        host_activity_detected=state.host_activity_detected | activity,
+        host_observation_unknown=jnp.zeros_like(state.host_observation_unknown),
+    )
+
+
+def _apply_analyse(state: CageState, target_host: int) -> CageState:
+    """Analyse action: detect activity on target host, clear its unknown flag."""
+    has_activity = (state.red_sessions[target_host] > 0) | (state.host_compromised[target_host] > 0)
+    new_detected = jnp.where(
+        has_activity,
+        state.host_activity_detected.at[target_host].set(True),
+        state.host_activity_detected,
+    )
+    return state.replace(
+        host_activity_detected=new_detected,
+        host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
+    )
+
+
+def _apply_remove(state: CageState, target_host: int) -> CageState:
+    """Remove action: kill user-level red sessions if activity was detected.
+
+    CybORG behavior:
+    - Only removes detected suspicious processes (requires prior Monitor/Analyse)
+    - Cannot remove root/SYSTEM (privileged) processes
+    - Sets observation to "Unknown" after Remove
+    """
+    was_detected = state.host_activity_detected[target_host]
+    is_user_level = state.red_privilege[target_host] == COMPROMISE_USER
+
+    # Remove only succeeds if activity was detected AND access is user-level (not privileged)
+    can_remove = was_detected & is_user_level
+
+    new_compromised = jnp.where(
+        can_remove,
+        COMPROMISE_NONE,
+        state.host_compromised[target_host],
+    )
+    new_sessions = jnp.where(
+        can_remove,
+        0,
+        state.red_sessions[target_host],
+    )
+    new_privilege = jnp.where(
+        can_remove,
+        COMPROMISE_NONE,
+        state.red_privilege[target_host],
+    )
+
+    # Clear activity detected flag and set unknown flag after Remove
+    new_activity_detected = state.host_activity_detected.at[target_host].set(False)
+    new_observation_unknown = state.host_observation_unknown.at[target_host].set(True)
+
+    return state.replace(
+        host_compromised=state.host_compromised.at[target_host].set(new_compromised),
+        red_sessions=state.red_sessions.at[target_host].set(new_sessions),
+        red_privilege=state.red_privilege.at[target_host].set(new_privilege),
+        host_activity_detected=new_activity_detected,
+        host_observation_unknown=new_observation_unknown,
     )
 
 
 def _apply_restore(state: CageState, target_host: int, const: CageConst) -> CageState:
-    """Restore action: reset host to initial configuration."""
+    """Restore action: reset host to initial configuration.
+
+    CybORG behavior: Restore clears Red sessions on most hosts, but preserves
+    the initial foothold on User0 (host index 8). This matches CybORG tests
+    where PrivEsc fails after Restore on exploited hosts, but succeeds on User0.
+    """
+    from jaxmarl.environments.cage.state import HOST_IDS
+
+    is_initial_foothold = target_host == HOST_IDS['User0']
+
+    new_sessions = jax.lax.cond(
+        is_initial_foothold,
+        lambda: state.red_sessions[target_host],
+        lambda: jnp.array(0, dtype=state.red_sessions.dtype),
+    )
+    new_privilege = jax.lax.cond(
+        is_initial_foothold,
+        lambda: state.red_privilege[target_host],
+        lambda: jnp.array(COMPROMISE_NONE, dtype=state.red_privilege.dtype),
+    )
+
     return state.replace(
         host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_NONE),
         host_services=state.host_services.at[target_host].set(const.initial_services[target_host]),
         host_decoys=state.host_decoys.at[target_host].set(jnp.zeros(const.num_decoys, dtype=jnp.bool_)),
-        red_sessions=state.red_sessions.at[target_host].set(0),
-        red_privilege=state.red_privilege.at[target_host].set(COMPROMISE_NONE),
+        red_sessions=state.red_sessions.at[target_host].set(new_sessions),
+        red_privilege=state.red_privilege.at[target_host].set(new_privilege),
+        ot_service_stopped=state.ot_service_stopped.at[target_host].set(False),
+        host_activity_detected=state.host_activity_detected.at[target_host].set(False),
+        host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
     )
 
 
@@ -294,7 +399,7 @@ def apply_red_action(
 
     state = jax.lax.cond(
         action_type == 5,  # Impact
-        lambda s: _apply_impact(s, target_host),
+        lambda s: _apply_impact(s, target_host, const),
         lambda s: s,
         state,
     )
@@ -349,7 +454,7 @@ def _apply_exploit(
     const: CageConst,
     key: chex.PRNGKey
 ) -> CageState:
-    """Attempt to exploit target host."""
+    """Attempt to exploit target host. Deterministic success based on service + decoy."""
     host_scanned = state.red_scanned_hosts[target_host]
 
     services_on_host = state.host_services[target_host]
@@ -358,12 +463,8 @@ def _apply_exploit(
 
     decoy_present = state.host_decoys[target_host, exploit_type % const.num_decoys]
 
-    # SSH brute force (exploit 0) has 0.8 success rate, others 0.9
-    success_prob = jnp.where(exploit_type == 0, 0.8, 0.9)
-    random_success = jax.random.uniform(key) < success_prob
-
-    can_exploit = host_scanned & has_vulnerable_service & ~decoy_present
-    success = can_exploit & random_success
+    # Deterministic: success if host scanned, has vulnerable service, and no decoy
+    success = host_scanned & has_vulnerable_service & ~decoy_present
 
     new_compromised = jnp.where(
         success & (state.host_compromised[target_host] < COMPROMISE_USER),
@@ -417,12 +518,20 @@ def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> Cag
     )
 
 
-def _apply_impact(state: CageState, target_host: int) -> CageState:
-    """Impact action on operational host."""
+def _apply_impact(state: CageState, target_host: int, const: CageConst) -> CageState:
+    """Impact action on operational host - stops OT service."""
     has_privileged = state.red_privilege[target_host] >= COMPROMISE_PRIVILEGED
-    success = has_privileged
+    is_operational = const.operational_targets[target_host]
+    success = has_privileged & is_operational
+
+    new_ot_stopped = jnp.where(
+        success,
+        state.ot_service_stopped.at[target_host].set(True),
+        state.ot_service_stopped,
+    )
 
     return state.replace(
+        ot_service_stopped=new_ot_stopped,
         last_red_action_success=success,
     )
 
@@ -433,21 +542,28 @@ def get_blue_action_mask(state: CageState, const: CageConst) -> chex.Array:
     mask = jnp.ones(action_size, dtype=jnp.bool_)
     analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)
 
-    # Remove only valid if host is compromised
+    # Remove only valid if activity detected AND host has user-level (not privileged) access
     def check_remove(i, mask):
-        remove_valid = state.host_compromised[i] > 0
+        activity_detected = state.host_activity_detected[i]
+        is_user_level = state.red_privilege[i] == COMPROMISE_USER
+        remove_valid = activity_detected & is_user_level
         return mask.at[remove_start + i].set(remove_valid)
 
     mask = jax.lax.fori_loop(0, const.num_hosts, check_remove, mask)
 
-    # Decoys only if not already deployed
+    # Decoys only if not already deployed and OS is compatible
     def check_decoy_host(i, mask):
         host_idx = const.decoy_host_indices[i]
+        host_os = const.host_os[host_idx]
 
         def check_decoy_type(d, mask):
             decoy_action_idx = decoy_start + i * const.num_decoys + d
             already_deployed = state.host_decoys[host_idx, d]
-            return mask.at[decoy_action_idx].set(~already_deployed)
+            # Check OS compatibility: OS_ANY(-1) works everywhere
+            required_os = DECOY_OS_ARRAY[d]
+            os_compatible = (required_os == OS_ANY) | (required_os == host_os)
+            valid = ~already_deployed & os_compatible
+            return mask.at[decoy_action_idx].set(valid)
 
         return jax.lax.fori_loop(0, const.num_decoys, check_decoy_type, mask)
 

@@ -25,7 +25,7 @@ def compute_rewards(
 
     CybORG-equivalent reward calculation:
     - Red only gets confidentiality for PRIVILEGED (root/SYSTEM) sessions
-    - Red gets availability for compromised operational targets
+    - Red gets availability only for operational hosts where Impact has stopped OT service
     - Blue reward is negative of Red's (zero-sum base)
     - Blue pays additional cost for Restore actions
 
@@ -38,10 +38,10 @@ def compute_rewards(
         privileged_hosts * const.host_confidentiality * CONFIDENTIALITY_SCALE
     )
 
-    # Availability: sum over all operational targets with privileged access
-    operational_compromised = privileged_hosts * const.operational_targets.astype(jnp.float32)
+    # Availability: only counts where OT service was stopped by Impact action
+    ot_stopped = state.ot_service_stopped.astype(jnp.float32)
     availability_reward = jnp.sum(
-        operational_compromised * const.host_availability * AVAILABILITY_SCALE
+        ot_stopped * const.host_availability * AVAILABILITY_SCALE
     )
 
     red_reward = confidentiality_reward + availability_reward
@@ -71,9 +71,10 @@ def compute_rewards_simple(state: CageState, const: CageConst) -> dict[str, chex
         privileged_hosts * const.host_confidentiality * CONFIDENTIALITY_SCALE
     )
 
-    operational_compromised = privileged_hosts * const.operational_targets.astype(jnp.float32)
+    # Availability: only counts where OT service was stopped by Impact action
+    ot_stopped = state.ot_service_stopped.astype(jnp.float32)
     availability_reward = jnp.sum(
-        operational_compromised * const.host_availability * AVAILABILITY_SCALE
+        ot_stopped * const.host_availability * AVAILABILITY_SCALE
     )
 
     red_reward = confidentiality_reward + availability_reward

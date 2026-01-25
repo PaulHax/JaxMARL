@@ -78,11 +78,13 @@ class TestRedActionDecoding:
 
 class TestBlueActions:
     def test_remove_clears_compromise(self, const, foothold_state):
-        """Test that Remove action clears compromise on target host."""
+        """Test that Remove action clears compromise on target host when activity detected."""
+        # Set up: host is compromised at USER level AND activity has been detected
         state = foothold_state.replace(
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
+            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
@@ -91,6 +93,40 @@ class TestBlueActions:
         assert new_state.host_compromised[HOST_IDS['Enterprise0']] == COMPROMISE_NONE
         assert new_state.red_sessions[HOST_IDS['Enterprise0']] == 0
         assert new_state.red_privilege[HOST_IDS['Enterprise0']] == COMPROMISE_NONE
+        # After Remove, observation should be Unknown
+        assert new_state.host_observation_unknown[HOST_IDS['Enterprise0']]
+
+    def test_remove_requires_activity_detected(self, const, foothold_state):
+        """Test that Remove does nothing if activity was not detected."""
+        state = foothold_state.replace(
+            host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
+            red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
+            red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
+            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(False),
+        )
+
+        remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
+        new_state = apply_blue_action(state, jnp.array(remove_action), const)
+
+        # Remove should NOT clear compromise if activity not detected
+        assert new_state.host_compromised[HOST_IDS['Enterprise0']] == COMPROMISE_USER
+        assert new_state.red_sessions[HOST_IDS['Enterprise0']] == 1
+
+    def test_remove_cannot_remove_privileged(self, const, foothold_state):
+        """Test that Remove cannot clear privileged (root/SYSTEM) access."""
+        state = foothold_state.replace(
+            host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
+            red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
+        )
+
+        remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
+        new_state = apply_blue_action(state, jnp.array(remove_action), const)
+
+        # Remove should NOT clear privileged access
+        assert new_state.host_compromised[HOST_IDS['Enterprise0']] == COMPROMISE_PRIVILEGED
+        assert new_state.red_privilege[HOST_IDS['Enterprise0']] == COMPROMISE_PRIVILEGED
 
     def test_restore_resets_host(self, const, foothold_state):
         """Test that Restore action resets host to initial state."""
@@ -194,12 +230,38 @@ class TestRedActions:
 
 class TestActionMasks:
     def test_blue_remove_mask(self, const, initial_state, foothold_state):
-        """Test Remove action mask reflects compromised hosts."""
-        mask_initial = get_blue_action_mask(initial_state, const)
-        mask_foothold = get_blue_action_mask(foothold_state, const)
+        """Test Remove action mask requires activity detected AND user-level access.
 
-        assert mask_foothold[BLUE_REMOVE_START + HOST_IDS['User0']]
-        assert not mask_foothold[BLUE_REMOVE_START + HOST_IDS['Enterprise0']]
+        Note: Remove cannot clear privileged access. The initial foothold on User0
+        has PRIVILEGED access (matching CybORG), so Remove won't work there.
+        We test with a host that has USER-level access instead.
+        """
+        mask_initial = get_blue_action_mask(initial_state, const)
+
+        # Foothold state: User0 has PRIVILEGED access (Remove can't clear this)
+        # Set up Enterprise0 with USER-level access for testing Remove
+        state_user_access = foothold_state.replace(
+            host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
+            red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
+            red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
+        )
+        mask_no_detect = get_blue_action_mask(state_user_access, const)
+        # Remove should NOT be valid without activity detection
+        assert not mask_no_detect[BLUE_REMOVE_START + HOST_IDS['Enterprise0']]
+
+        # Set up state with activity detected AND user-level access
+        state_detected = state_user_access.replace(
+            host_activity_detected=state_user_access.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
+        )
+        mask_detected = get_blue_action_mask(state_detected, const)
+        # Now Remove should be valid for Enterprise0 (user-level access + detected)
+        assert mask_detected[BLUE_REMOVE_START + HOST_IDS['Enterprise0']]
+        # User0 has PRIVILEGED access - Remove is NOT valid even with detection
+        state_user0_detected = state_detected.replace(
+            host_activity_detected=state_detected.host_activity_detected.at[HOST_IDS['User0']].set(True),
+        )
+        mask_user0 = get_blue_action_mask(state_user0_detected, const)
+        assert not mask_user0[BLUE_REMOVE_START + HOST_IDS['User0']]
 
     def test_red_discover_mask(self, const, foothold_state):
         """Test DiscoverRemoteSystems mask based on Red's reach."""
