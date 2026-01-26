@@ -20,6 +20,38 @@ DECOY_OS_ARRAY = jnp.array([
     for name, idx in sorted(DECOY_IDS.items(), key=lambda x: x[1])
 ], dtype=jnp.int32)
 
+# Exploit-to-Decoy blocking mapping based on port/service matching
+# Each exploit targets a specific service, and decoys for that service block it
+# Decoy IDs: Apache=0, Femitter=1, HarakaSMPT=2, Smss=3, SSHD=4, Svchost=5, Tomcat=6, Vsftpd=7
+# Exploit IDs: SSHBruteForce=0, FTPDirectoryTraversal=1, HTTPRFI=2, HTTPSRFI=3,
+#              HarakaRCE=4, SQLInjection=5, EternalBlue=6, BlueKeep=7
+EXPLOIT_BLOCKED_BY_DECOYS = jnp.array([
+    # [exploit_idx, decoy_idx_1, decoy_idx_2] where -1 means no decoy
+    [0, 4, -1],  # SSHBruteForce blocked by DecoySSHD (4)
+    [1, 1, 7],   # FTPDirectoryTraversal blocked by DecoyFemitter (1) or DecoyVsftpd (7)
+    [2, 0, 6],   # HTTPRFI blocked by DecoyApache (0) or DecoyTomcat (6)
+    [3, 0, 6],   # HTTPSRFI blocked by DecoyApache (0) or DecoyTomcat (6)
+    [4, 2, -1],  # HarakaRCE blocked by DecoyHarakaSMPT (2)
+    [5, -1, -1], # SQLInjection - no decoy blocks it
+    [6, 3, -1],  # EternalBlue blocked by DecoySmss (3)
+    [7, 5, -1],  # BlueKeep blocked by DecoySvchost (5)
+], dtype=jnp.int32)
+
+# Decoy-to-Service conflict mapping: which services conflict with each decoy
+# SERVICE_IDS: ssh=0, ftp=1, http=2, https=3, smtp=4, mysql=5, smb=6, rdp=7, tomcat=8, haraka=9
+# Each decoy can only be deployed if its target port isn't already in use
+# Format: [service_idx_1, service_idx_2] where -1 means no conflict
+DECOY_SERVICE_CONFLICTS = jnp.array([
+    [2, 8],   # DecoyApache (port 80) conflicts with http(2) or tomcat(8)
+    [1, -1],  # DecoyFemitter (port 21) conflicts with ftp(1)
+    [4, 9],   # DecoyHarakaSMPT (port 25) conflicts with smtp(4) or haraka(9)
+    [6, -1],  # DecoySmss (port 139) conflicts with smb(6)
+    [0, -1],  # DecoySSHD (port 22) conflicts with ssh(0)
+    [7, -1],  # DecoySvchost (port 3389) conflicts with rdp(7)
+    [2, 8],   # DecoyTomcat (port 80) conflicts with http(2) or tomcat(8)
+    [1, -1],  # DecoyVsftpd (port 21) conflicts with ftp(1)
+], dtype=jnp.int32)
+
 # Default action space sizes for backward compatibility (Scenario 2 with 13 hosts)
 NUM_HOSTS = 13
 NUM_SUBNETS = 3
@@ -120,6 +152,8 @@ def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.
         )
     )
 
+    # CybORG decoy action layout: decoy_type first, then host
+    # action = decoy_start + decoy_type * num_decoy_hosts + host_index
     target_host = jnp.where(
         action < analyse_start,
         -1,  # Sleep/Monitor have no target
@@ -131,7 +165,7 @@ def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.
                 action - remove_start,  # Remove target
                 jnp.where(
                     action < restore_start,
-                    const.decoy_host_indices[(action - decoy_start) // const.num_decoys],  # Decoy target
+                    const.decoy_host_indices[(action - decoy_start) % const.num_decoy_hosts],  # Decoy target
                     action - restore_start,  # Restore target
                 )
             )
@@ -140,7 +174,7 @@ def decode_blue_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.
 
     decoy_type = jnp.where(
         (action >= decoy_start) & (action < restore_start),
-        (action - decoy_start) % const.num_decoys,
+        (action - decoy_start) // const.num_decoy_hosts,  # decoy_type = idx // num_hosts
         -1,
     )
 
@@ -242,7 +276,7 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
 
     state = jax.lax.cond(
         action_type == 5,  # Decoy
-        lambda s: _apply_decoy(s, target_host, decoy_type),
+        lambda s: _apply_decoy(s, target_host, decoy_type, const),
         lambda s: s,
         state,
     )
@@ -351,10 +385,25 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
     )
 
 
-def _apply_decoy(state: CageState, target_host: int, decoy_type: int) -> CageState:
-    """Deploy decoy on target host."""
+def _apply_decoy(state: CageState, target_host: int, decoy_type: int, const: CageConst) -> CageState:
+    """Deploy decoy on target host if port is available (matching CybORG behavior).
+
+    In CybORG, decoy deployment fails (returns success=FALSE) if the port is already
+    in use by an existing service. We match this by only setting the decoy flag if
+    the port is available.
+    """
+    # Check port conflict using DECOY_SERVICE_CONFLICTS
+    conflict1 = DECOY_SERVICE_CONFLICTS[decoy_type, 0]
+    conflict2 = DECOY_SERVICE_CONFLICTS[decoy_type, 1]
+    has_conflict1 = jnp.where(conflict1 >= 0, state.host_services[target_host, conflict1], False)
+    has_conflict2 = jnp.where(conflict2 >= 0, state.host_services[target_host, conflict2], False)
+    port_available = ~has_conflict1 & ~has_conflict2
+
+    # Only deploy if port is available
+    new_decoy_value = jnp.where(port_available, True, state.host_decoys[target_host, decoy_type])
+
     return state.replace(
-        host_decoys=state.host_decoys.at[target_host, decoy_type].set(True),
+        host_decoys=state.host_decoys.at[target_host, decoy_type].set(new_decoy_value),
     )
 
 
@@ -376,7 +425,7 @@ def apply_red_action(
 
     state = jax.lax.cond(
         action_type == 2,  # DiscoverNetworkServices
-        lambda s: _apply_scan_host(s, target_host),
+        lambda s: _apply_scan_host(s, target_host, const),
         lambda s: s,
         state,
     )
@@ -435,13 +484,36 @@ def _apply_discover_subnet(state: CageState, target_subnet: int, const: CageCons
     )
 
 
-def _apply_scan_host(state: CageState, target_host: int) -> CageState:
-    """Scan target host for services."""
-    can_scan = state.red_discovered_hosts[target_host]
+def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> CageState:
+    """Scan target host for services.
+
+    CybORG behavior: Scan works on any host that is routable from a session Red owns.
+    Network routing is determined by subnet adjacency - Red needs a session in
+    an adjacent subnet to scan the target.
+    """
+    num_hosts = const.num_hosts
+    num_subnets = const.num_subnets
+    target_subnet = const.host_subnet[target_host]
+
+    # Find which subnets Red has sessions in
+    red_subnets = jnp.zeros(num_subnets, dtype=jnp.bool_)
+
+    def check_subnet(i, red_subnets):
+        has_session = state.red_sessions[i] > 0
+        subnet = const.host_subnet[i]
+        return red_subnets.at[subnet].set(red_subnets[subnet] | has_session)
+
+    red_subnets = jax.lax.fori_loop(0, num_hosts, check_subnet, red_subnets)
+
+    # Can scan if Red has session in adjacent subnet (or same subnet)
+    can_scan = jnp.any(red_subnets & const.subnet_adjacency[:, target_subnet])
 
     return state.replace(
         red_scanned_hosts=state.red_scanned_hosts.at[target_host].set(
             state.red_scanned_hosts[target_host] | can_scan
+        ),
+        red_discovered_hosts=state.red_discovered_hosts.at[target_host].set(
+            state.red_discovered_hosts[target_host] | can_scan
         ),
         last_red_action_success=can_scan,
     )
@@ -454,21 +526,44 @@ def _apply_exploit(
     const: CageConst,
     key: chex.PRNGKey
 ) -> CageState:
-    """Attempt to exploit target host. Deterministic success based on service + decoy."""
+    """Attempt to exploit target host. Deterministic success based on service + decoy.
+
+    CybORG behavior: Different exploits give different privilege levels based on
+    what user the vulnerable service runs as:
+    - HarakaRCE (SMTP/Haraka) → root (service runs as root)
+    - SSHBruteForce → pi/user (standard user bruteforce)
+    - HTTPRFI/HTTPSRFI → NetworkService/www-data (limited web user)
+    - Others → user-level
+
+    Exploit indices that give PRIVILEGED: HarakaRCE (4)
+    All others give USER level and require PrivEsc for root.
+    """
     host_scanned = state.red_scanned_hosts[target_host]
 
     services_on_host = state.host_services[target_host]
     exploit_vulnerabilities = const.service_exploits[:, exploit_type]
     has_vulnerable_service = jnp.any(services_on_host & exploit_vulnerabilities)
 
-    decoy_present = state.host_decoys[target_host, exploit_type % const.num_decoys]
+    # Check if any blocking decoy is deployed on the target host
+    # EXPLOIT_BLOCKED_BY_DECOYS[exploit_type] gives [exploit_idx, decoy1, decoy2]
+    blocking_decoys = EXPLOIT_BLOCKED_BY_DECOYS[exploit_type]
+    decoy1 = blocking_decoys[1]
+    decoy2 = blocking_decoys[2]
+    decoy1_present = jnp.where(decoy1 >= 0, state.host_decoys[target_host, decoy1], False)
+    decoy2_present = jnp.where(decoy2 >= 0, state.host_decoys[target_host, decoy2], False)
+    decoy_present = decoy1_present | decoy2_present
 
     # Deterministic: success if host scanned, has vulnerable service, and no decoy
     success = host_scanned & has_vulnerable_service & ~decoy_present
 
+    # HarakaRCE (exploit_type 4) gives root directly, others give user
+    gives_root = exploit_type == 4  # HarakaRCE
+
+    target_privilege = jnp.where(gives_root, COMPROMISE_PRIVILEGED, COMPROMISE_USER)
+
     new_compromised = jnp.where(
-        success & (state.host_compromised[target_host] < COMPROMISE_USER),
-        COMPROMISE_USER,
+        success & (state.host_compromised[target_host] < target_privilege),
+        target_privilege,
         state.host_compromised[target_host],
     )
 
@@ -479,8 +574,8 @@ def _apply_exploit(
     )
 
     new_privilege = jnp.where(
-        success & (state.red_privilege[target_host] < COMPROMISE_USER),
-        COMPROMISE_USER,
+        success & (state.red_privilege[target_host] < target_privilege),
+        target_privilege,
         state.red_privilege[target_host],
     )
 
@@ -552,22 +647,24 @@ def get_blue_action_mask(state: CageState, const: CageConst) -> chex.Array:
     mask = jax.lax.fori_loop(0, const.num_hosts, check_remove, mask)
 
     # Decoys only if not already deployed and OS is compatible
-    def check_decoy_host(i, mask):
-        host_idx = const.decoy_host_indices[i]
-        host_os = const.host_os[host_idx]
+    # (Port conflicts are checked at execution time, matching CybORG behavior)
+    # CybORG action layout: decoy_type first, then host
+    # action = decoy_start + decoy_type * num_decoy_hosts + host_index
+    def check_decoy_type(d, mask):
+        required_os = DECOY_OS_ARRAY[d]
 
-        def check_decoy_type(d, mask):
-            decoy_action_idx = decoy_start + i * const.num_decoys + d
+        def check_host(i, mask):
+            host_idx = const.decoy_host_indices[i]
+            host_os = const.host_os[host_idx]
+            decoy_action_idx = decoy_start + d * const.num_decoy_hosts + i
             already_deployed = state.host_decoys[host_idx, d]
-            # Check OS compatibility: OS_ANY(-1) works everywhere
-            required_os = DECOY_OS_ARRAY[d]
             os_compatible = (required_os == OS_ANY) | (required_os == host_os)
             valid = ~already_deployed & os_compatible
             return mask.at[decoy_action_idx].set(valid)
 
-        return jax.lax.fori_loop(0, const.num_decoys, check_decoy_type, mask)
+        return jax.lax.fori_loop(0, const.num_decoy_hosts, check_host, mask)
 
-    mask = jax.lax.fori_loop(0, const.num_decoy_hosts, check_decoy_host, mask)
+    mask = jax.lax.fori_loop(0, const.num_decoys, check_decoy_type, mask)
 
     return mask
 

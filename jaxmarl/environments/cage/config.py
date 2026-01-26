@@ -173,22 +173,24 @@ def create_scenario2_config() -> ScenarioConfig:
     """Create CAGE Challenge 2 Scenario 2 configuration.
 
     Hosts are ordered alphabetically to match CybORG's BlueTableWrapper.
+    Services and OS types match CybORG Scenario2.yaml exactly.
     """
     hosts = [
         # Alphabetical order to match CybORG
+        # Services match CybORG's Scenario2 exactly
         HostConfig('Defender', 'Enterprise', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Enterprise0', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'http']),
-        HostConfig('Enterprise1', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb']),
-        HostConfig('Enterprise2', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'tomcat']),
+        HostConfig('Enterprise0', 'Enterprise', 'linux', confidentiality=1.0, availability=1.0, services=['ssh']),
+        HostConfig('Enterprise1', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb', 'rdp', 'http', 'https', 'tomcat']),
+        HostConfig('Enterprise2', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb', 'rdp', 'http', 'https', 'tomcat']),
         HostConfig('Op_Host0', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
         HostConfig('Op_Host1', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Op_Host2', 'Operational', 'windows', confidentiality=0.1, availability=0.1, services=['rdp']),
-        HostConfig('Op_Server0', 'Operational', 'windows', confidentiality=1.0, availability=10.0, services=['ssh', 'http'], is_operational_target=True),
-        HostConfig('User0', 'User', 'linux', confidentiality=0.0, availability=0.0, services=['ssh']),
-        HostConfig('User1', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
-        HostConfig('User2', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
-        HostConfig('User3', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
-        HostConfig('User4', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh']),
+        HostConfig('Op_Host2', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
+        HostConfig('Op_Server0', 'Operational', 'linux', confidentiality=1.0, availability=10.0, services=['ssh'], is_operational_target=True),
+        HostConfig('User0', 'User', 'windows', confidentiality=0.0, availability=0.0, services=['ssh', 'ftp']),
+        HostConfig('User1', 'User', 'windows', confidentiality=0.1, availability=0.0, services=['ssh', 'ftp']),
+        HostConfig('User2', 'User', 'windows', confidentiality=0.1, availability=0.0, services=['smb', 'rdp']),
+        HostConfig('User3', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['http', 'https', 'haraka', 'mysql']),
+        HostConfig('User4', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh', 'http', 'https', 'haraka', 'mysql']),
     ]
 
     subnets = [
