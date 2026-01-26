@@ -2,6 +2,9 @@
 
 This module provides configuration structures for creating CAGE environments
 with variable numbers of hosts, subnets, and network topologies.
+
+Scenario2 configuration is loaded directly from CybORG YAML files to ensure
+consistency with the reference implementation. See cyborg_loader.py for details.
 """
 
 from dataclasses import dataclass, field
@@ -172,45 +175,11 @@ class ScenarioConfig:
 def create_scenario2_config() -> ScenarioConfig:
     """Create CAGE Challenge 2 Scenario 2 configuration.
 
-    Hosts are ordered alphabetically to match CybORG's BlueTableWrapper.
-    Services and OS types match CybORG Scenario2.yaml exactly.
+    Loads configuration directly from CybORG YAML files to ensure consistency
+    with the reference implementation.
     """
-    hosts = [
-        # Alphabetical order to match CybORG
-        # Services match CybORG's Scenario2 exactly
-        HostConfig('Defender', 'Enterprise', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Enterprise0', 'Enterprise', 'linux', confidentiality=1.0, availability=1.0, services=['ssh']),
-        HostConfig('Enterprise1', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb', 'rdp', 'http', 'https', 'tomcat']),
-        HostConfig('Enterprise2', 'Enterprise', 'windows', confidentiality=1.0, availability=1.0, services=['ssh', 'smb', 'rdp', 'http', 'https', 'tomcat']),
-        HostConfig('Op_Host0', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Op_Host1', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Op_Host2', 'Operational', 'linux', confidentiality=0.1, availability=0.1, services=['ssh']),
-        HostConfig('Op_Server0', 'Operational', 'linux', confidentiality=1.0, availability=10.0, services=['ssh'], is_operational_target=True),
-        HostConfig('User0', 'User', 'windows', confidentiality=0.0, availability=0.0, services=['ssh', 'ftp']),
-        HostConfig('User1', 'User', 'windows', confidentiality=0.1, availability=0.0, services=['ssh', 'ftp']),
-        HostConfig('User2', 'User', 'windows', confidentiality=0.1, availability=0.0, services=['smb', 'rdp']),
-        HostConfig('User3', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['http', 'https', 'haraka', 'mysql']),
-        HostConfig('User4', 'User', 'linux', confidentiality=0.1, availability=0.0, services=['ssh', 'http', 'https', 'haraka', 'mysql']),
-    ]
-
-    subnets = [
-        SubnetConfig('User', ['User0', 'User1', 'User2', 'User3', 'User4'], ['User', 'Enterprise']),
-        SubnetConfig('Enterprise', ['Enterprise0', 'Enterprise1', 'Enterprise2', 'Defender'], ['User', 'Enterprise', 'Operational']),
-        SubnetConfig('Operational', ['Op_Host0', 'Op_Host1', 'Op_Host2', 'Op_Server0'], ['Enterprise', 'Operational']),
-    ]
-
-    agents = [
-        AgentConfig('Blue', starting_host='Defender', team='blue'),
-        AgentConfig('Red', starting_host='User0', team='red'),
-    ]
-
-    return ScenarioConfig(
-        name='Scenario2',
-        hosts=hosts,
-        subnets=subnets,
-        agents=agents,
-        max_steps=100,
-    )
+    from jaxmarl.environments.cage.cyborg_loader import get_scenario_from_cyborg
+    return get_scenario_from_cyborg('Scenario2')
 
 
 def create_scalable_config(
