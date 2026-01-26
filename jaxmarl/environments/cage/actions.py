@@ -476,10 +476,10 @@ def _apply_discover_subnet(state: CageState, target_subnet: int, const: CageCons
         is_in_subnet = const.host_subnet[i] == target_subnet
         return new_discovered.at[i].set(new_discovered[i] | (can_reach & is_in_subnet))
 
-    new_discovered = jax.lax.fori_loop(0, num_hosts, update_discovered, state.red_discovered_hosts)
+    new_discovered = jax.lax.fori_loop(0, num_hosts, update_discovered, state.red_discovered_hosts_jax)
 
     return state.replace(
-        red_discovered_hosts=new_discovered,
+        red_discovered_hosts_jax=new_discovered,
         last_red_action_success=can_reach,
     )
 
@@ -509,11 +509,11 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
     can_scan = jnp.any(red_subnets & const.subnet_adjacency[:, target_subnet])
 
     return state.replace(
-        red_scanned_hosts=state.red_scanned_hosts.at[target_host].set(
-            state.red_scanned_hosts[target_host] | can_scan
+        red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[target_host].set(
+            state.red_scanned_hosts_jax[target_host] | can_scan
         ),
-        red_discovered_hosts=state.red_discovered_hosts.at[target_host].set(
-            state.red_discovered_hosts[target_host] | can_scan
+        red_discovered_hosts_jax=state.red_discovered_hosts_jax.at[target_host].set(
+            state.red_discovered_hosts_jax[target_host] | can_scan
         ),
         last_red_action_success=can_scan,
     )
@@ -538,7 +538,7 @@ def _apply_exploit(
     Exploit indices that give PRIVILEGED: HarakaRCE (4)
     All others give USER level and require PrivEsc for root.
     """
-    host_scanned = state.red_scanned_hosts[target_host]
+    host_scanned = state.red_scanned_hosts_jax[target_host]
 
     services_on_host = state.host_services[target_host]
     exploit_vulnerabilities = const.service_exploits[:, exploit_type]
@@ -556,8 +556,8 @@ def _apply_exploit(
     # Deterministic: success if host scanned, has vulnerable service, and no decoy
     success = host_scanned & has_vulnerable_service & ~decoy_present
 
-    # HarakaRCE (exploit_type 4) gives root directly, others give user
-    gives_root = exploit_type == 4  # HarakaRCE
+    # HarakaRCE(4), EternalBlue(6), BlueKeep(7) give root directly (run as root/SYSTEM)
+    gives_root = (exploit_type == 4) | (exploit_type == 6) | (exploit_type == 7)
 
     target_privilege = jnp.where(gives_root, COMPROMISE_PRIVILEGED, COMPROMISE_USER)
 
@@ -690,7 +690,7 @@ def get_red_action_mask(state: CageState, const: CageConst) -> chex.Array:
 
     # DiscoverNetworkServices: need discovered host
     def check_scan(i, mask):
-        scan_valid = state.red_discovered_hosts[i]
+        scan_valid = state.red_discovered_hosts_jax[i]
         return mask.at[scan_start + i].set(scan_valid)
 
     mask = jax.lax.fori_loop(0, const.num_hosts, check_scan, mask)
@@ -699,7 +699,7 @@ def get_red_action_mask(state: CageState, const: CageConst) -> chex.Array:
     def check_exploit_type(e, mask):
         def check_exploit_host(i, mask):
             exploit_action_idx = exploit_start + e * const.num_hosts + i
-            exploit_valid = state.red_scanned_hosts[i]
+            exploit_valid = state.red_scanned_hosts_jax[i]
             return mask.at[exploit_action_idx].set(exploit_valid)
 
         return jax.lax.fori_loop(0, const.num_hosts, check_exploit_host, mask)

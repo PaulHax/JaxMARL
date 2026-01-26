@@ -228,23 +228,53 @@ def load_scenario_from_cyborg(
         ))
 
     # Build subnet configs with connectivity
+    # NACLs define bidirectional rules: source must allow 'out' AND target must allow 'in'
+    all_subnet_names = list(subnets_data.keys())
+
+    def can_reach(src_subnet: str, dst_subnet: str) -> bool:
+        """Check if src_subnet can reach dst_subnet based on NACLs."""
+        if src_subnet == dst_subnet:
+            return True
+
+        src_nacls = subnets_data[src_subnet].get('NACLs', {})
+        dst_nacls = subnets_data[dst_subnet].get('NACLs', {})
+
+        # Check source allows outgoing to destination
+        src_allows_out = False
+        if 'all' in src_nacls:
+            out_rule = src_nacls['all'].get('out', 'None')
+            if out_rule == 'all' or out_rule != 'None':
+                src_allows_out = True
+        if dst_subnet in src_nacls:
+            out_rule = src_nacls[dst_subnet].get('out', 'None')
+            if out_rule == 'all' or out_rule != 'None':
+                src_allows_out = True
+
+        # Check destination allows incoming from source
+        dst_allows_in = False
+        dst_blocks_in = False
+        if 'all' in dst_nacls:
+            in_rule = dst_nacls['all'].get('in', 'None')
+            if in_rule == 'all' or in_rule != 'None':
+                dst_allows_in = True
+        if src_subnet in dst_nacls:
+            in_rule = dst_nacls[src_subnet].get('in', 'None')
+            if in_rule == 'None':
+                dst_blocks_in = True
+            elif in_rule == 'all' or in_rule != 'None':
+                dst_allows_in = True
+
+        return src_allows_out and dst_allows_in and not dst_blocks_in
+
     subnet_configs = []
-    for subnet_name in subnets_data.keys():
+    for subnet_name in all_subnet_names:
         subnet_info = subnets_data[subnet_name]
         hosts_in_subnet = [h.name for h in host_configs if h.subnet == subnet_name]
 
-        # Determine connected subnets from NACLs
-        nacls = subnet_info.get('NACLs', {})
         connected = set()
-        connected.add(subnet_name)
-
-        for target, rules in nacls.items():
-            if target == 'all':
-                connected.update(subnets_data.keys())
-            elif target in subnets_data:
-                out_rule = rules.get('out', 'None')
-                if out_rule == 'all' or out_rule != 'None':
-                    connected.add(target)
+        for other_subnet in all_subnet_names:
+            if can_reach(subnet_name, other_subnet):
+                connected.add(other_subnet)
 
         subnet_configs.append(SubnetConfig(
             name=subnet_name,

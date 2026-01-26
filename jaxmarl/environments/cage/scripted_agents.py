@@ -18,9 +18,8 @@ from jaxmarl.environments.cage.actions import get_red_action_offsets
 # Host indices (alphabetical): Defender=0, Enterprise0=1, Enterprise1=2, Enterprise2=3,
 #              Op_Host0=4, Op_Host1=5, Op_Host2=6, Op_Server0=7,
 #              User0=8, User1=9, User2=10, User3=11, User4=12
-BLINE_USER_SUBNET = 0
-BLINE_ENTERPRISE_SUBNET = 1
-BLINE_OPERATIONAL_SUBNET = 2
+# Subnet indices are looked up dynamically from const.host_subnet since they
+# depend on the order subnets appear in the config file.
 BLINE_USER_HOST = 9   # User1 - initial target in User subnet
 BLINE_ENTERPRISE0 = 1
 BLINE_ENTERPRISE2 = 3
@@ -154,11 +153,17 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
     - Impact: impact_start + host_idx
 
     16-state FSM for complete B_lineAgent attack path.
+    Subnet indices are looked up dynamically from const.host_subnet.
     """
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
+    # Get subnet indices dynamically from host_subnet
+    user_subnet = const.host_subnet[BLINE_USER_HOST]
+    enterprise_subnet = const.host_subnet[BLINE_ENTERPRISE0]
+    operational_subnet = const.host_subnet[BLINE_OP_SERVER0]
+
     def state_0(_):  # DiscoverSubnet(User)
-        return discover_start + BLINE_USER_SUBNET
+        return discover_start + user_subnet
 
     def state_1(_):  # ScanHost(User1)
         return scan_start + BLINE_USER_HOST
@@ -170,7 +175,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
         return privesc_start + BLINE_USER_HOST
 
     def state_4(_):  # DiscoverSubnet(Enterprise)
-        return discover_start + BLINE_ENTERPRISE_SUBNET
+        return discover_start + enterprise_subnet
 
     def state_5(_):  # ScanHost(Enterprise0)
         return scan_start + BLINE_ENTERPRISE0
@@ -191,7 +196,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
         return privesc_start + BLINE_ENTERPRISE2
 
     def state_11(_):  # DiscoverSubnet(Operational)
-        return discover_start + BLINE_OPERATIONAL_SUBNET
+        return discover_start + operational_subnet
 
     def state_12(_):  # ScanHost(Op_Server0)
         return scan_start + BLINE_OP_SERVER0

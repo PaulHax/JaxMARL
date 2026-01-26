@@ -41,8 +41,8 @@ def test_cagestate_creation():
     assert state.red_sessions.shape == (NUM_HOSTS,)
     assert state.red_privilege.shape == (NUM_HOSTS,)
     assert state.blue_sessions.shape == (NUM_HOSTS,)
-    assert state.red_discovered_hosts.shape == (NUM_HOSTS,)
-    assert state.red_scanned_hosts.shape == (NUM_HOSTS,)
+    assert state.red_discovered_hosts_jax.shape == (NUM_HOSTS,)
+    assert state.red_scanned_hosts_jax.shape == (NUM_HOSTS,)
 
 
 def test_initial_state_values():
@@ -60,8 +60,8 @@ def test_initial_state_values():
     assert jnp.all(state.blue_sessions == 1)
 
     # Red hasn't discovered or scanned any hosts
-    assert jnp.all(state.red_discovered_hosts == False)
-    assert jnp.all(state.red_scanned_hosts == False)
+    assert jnp.all(state.red_discovered_hosts_jax == False)
+    assert jnp.all(state.red_scanned_hosts_jax == False)
 
 
 def test_initial_state_with_foothold():
@@ -80,8 +80,8 @@ def test_initial_state_with_foothold():
     assert state.red_sessions[HOST_IDS['User0']] == 1
 
     # Red should have discovered and scanned User0
-    assert state.red_discovered_hosts[HOST_IDS['User0']] == True
-    assert state.red_scanned_hosts[HOST_IDS['User0']] == True
+    assert state.red_discovered_hosts_jax[HOST_IDS['User0']] == True
+    assert state.red_scanned_hosts_jax[HOST_IDS['User0']] == True
 
     # Other hosts should be clean
     assert state.host_compromised[HOST_IDS['Enterprise0']] == COMPROMISE_NONE

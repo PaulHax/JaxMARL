@@ -87,7 +87,7 @@ class TestActionEquivalence:
         }
         _, jax_state, _, _, _ = jax_env.step_env(key, jax_state, actions)
 
-        assert jax_state.red_discovered_hosts[HOST_IDS['User0']]
+        assert jax_state.red_discovered_hosts_jax[HOST_IDS['User0']]
 
     def test_red_scan_host(self, envs):
         """DiscoverNetworkServices should scan target host."""
@@ -111,7 +111,7 @@ class TestActionEquivalence:
         }
         _, jax_state, _, _, _ = jax_env.step_env(key, jax_state, actions)
 
-        assert jax_state.red_scanned_hosts[HOST_IDS['User0']]
+        assert jax_state.red_scanned_hosts_jax[HOST_IDS['User0']]
 
 
 class TestTrajectoryEquivalence:
@@ -171,7 +171,7 @@ class TestTrajectoryEquivalence:
         _, jax_state, _, _, _ = jax_env.step_env(subkey, jax_state, actions)
 
         for host in ['User0', 'User1', 'User2', 'User3', 'User4']:
-            assert jax_state.red_discovered_hosts[HOST_IDS[host]], f"{host} should be discovered"
+            assert jax_state.red_discovered_hosts_jax[HOST_IDS[host]], f"{host} should be discovered"
 
     @pytest.mark.parametrize("seed", range(10))
     def test_random_trajectory(self, envs, seed):

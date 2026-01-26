@@ -88,8 +88,14 @@ class CageState:
     blue_sessions: chex.Array          # (max_hosts,) int: always 1 per host (Velociraptor)
 
     # Red agent knowledge (partial observability)
-    red_discovered_hosts: chex.Array   # (max_hosts,) bool: host IP discovered
-    red_scanned_hosts: chex.Array      # (max_hosts,) bool: ports scanned
+    # NOTE: Fields with _jax suffix are JAX-specific simplifications for action masking.
+    # CybORG doesn't track discovered/scanned hosts explicitly - it checks
+    # network routing dynamically at action time. JAX uses explicit state to
+    # avoid recomputing routing on every action, which is more efficient for
+    # vectorized environments. The game outcomes (rewards, compromise) match
+    # CybORG, but these internal tracking fields will differ in comparisons.
+    red_discovered_hosts_jax: chex.Array   # (max_hosts,) bool: host IP discovered
+    red_scanned_hosts_jax: chex.Array      # (max_hosts,) bool: ports scanned
 
     # Reward tracking
     cumulative_red_reward: chex.Array   # scalar float
@@ -279,8 +285,8 @@ def create_initial_state(const: CageConst) -> CageState:
         red_sessions=jnp.zeros(num_hosts, dtype=jnp.int32),
         red_privilege=jnp.zeros(num_hosts, dtype=jnp.int32),
         blue_sessions=jnp.ones(num_hosts, dtype=jnp.int32),
-        red_discovered_hosts=jnp.zeros(num_hosts, dtype=jnp.bool_),
-        red_scanned_hosts=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_discovered_hosts_jax=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_scanned_hosts_jax=jnp.zeros(num_hosts, dtype=jnp.bool_),
         cumulative_red_reward=jnp.array(0.0),
         cumulative_blue_reward=jnp.array(0.0),
         last_red_action_success=jnp.array(False),
@@ -305,8 +311,8 @@ def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
         host_compromised=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.host_compromised),
         red_sessions=jnp.where(red_start_mask, 1, state.red_sessions),
         red_privilege=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.red_privilege),
-        red_discovered_hosts=red_start_mask | state.red_discovered_hosts,
-        red_scanned_hosts=red_start_mask | state.red_scanned_hosts,
+        red_discovered_hosts_jax=red_start_mask | state.red_discovered_hosts_jax,
+        red_scanned_hosts_jax=red_start_mask | state.red_scanned_hosts_jax,
     )
 
     return state

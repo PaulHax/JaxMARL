@@ -95,7 +95,7 @@ class TestBlueObservation:
         """Detection features should reflect red activity when detected."""
         state = foothold_state.replace(
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
-            red_scanned_hosts=foothold_state.red_scanned_hosts.at[HOST_IDS['Enterprise0']].set(True),
+            red_scanned_hosts_jax=foothold_state.red_scanned_hosts_jax.at[HOST_IDS['Enterprise0']].set(True),
             host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
         )
 
@@ -181,7 +181,7 @@ class TestObservationNormalization:
         state = foothold_state.replace(
             host_compromised=jnp.full_like(foothold_state.host_compromised, COMPROMISE_PRIVILEGED),
             red_sessions=jnp.ones_like(foothold_state.red_sessions),
-            red_scanned_hosts=jnp.ones_like(foothold_state.red_scanned_hosts, dtype=jnp.bool_),
+            red_scanned_hosts_jax=jnp.ones_like(foothold_state.red_scanned_hosts_jax, dtype=jnp.bool_),
         )
 
         obs = get_blue_obs(state, const)
@@ -192,7 +192,7 @@ class TestObservationNormalization:
         """Red observation values should be in [0, 1]."""
         state = foothold_state.replace(
             last_red_action_success=jnp.array(True),
-            red_scanned_hosts=jnp.ones_like(foothold_state.red_scanned_hosts, dtype=jnp.bool_),
+            red_scanned_hosts_jax=jnp.ones_like(foothold_state.red_scanned_hosts_jax, dtype=jnp.bool_),
             red_privilege=jnp.full_like(foothold_state.red_privilege, COMPROMISE_PRIVILEGED),
         )
 

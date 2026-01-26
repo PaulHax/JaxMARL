@@ -238,7 +238,7 @@ class TestObservationEncodingEquivalence:
 
         host_idx = HOST_IDS['Enterprise0']
         state = state.replace(
-            red_scanned_hosts=state.red_scanned_hosts.at[host_idx].set(True),
+            red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
             host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
         )
         obs = get_blue_obs(state, env.const)
@@ -253,7 +253,7 @@ class TestObservationEncodingEquivalence:
 
         host_idx = HOST_IDS['Enterprise0']
         state = state.replace(
-            red_scanned_hosts=state.red_scanned_hosts.at[host_idx].set(True),
+            red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
             red_sessions=state.red_sessions.at[host_idx].set(1),
             host_compromised=state.host_compromised.at[host_idx].set(COMPROMISE_USER),
             host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
@@ -270,7 +270,7 @@ class TestObservationEncodingEquivalence:
 
         host_idx = HOST_IDS['Enterprise0']
         state = state.replace(
-            red_scanned_hosts=state.red_scanned_hosts.at[host_idx].set(True),
+            red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
             red_sessions=state.red_sessions.at[host_idx].set(1),
             host_compromised=state.host_compromised.at[host_idx].set(COMPROMISE_PRIVILEGED),
             host_activity_detected=state.host_activity_detected.at[host_idx].set(True),

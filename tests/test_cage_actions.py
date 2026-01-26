@@ -154,11 +154,13 @@ class TestRedActions:
         """Test DiscoverRemoteSystems reveals hosts in subnet."""
         key = jax.random.PRNGKey(42)
 
-        discover_enterprise = RED_DISCOVER_SUBNET_START + 1  # Enterprise subnet
+        # Get Enterprise subnet index dynamically
+        enterprise_subnet = int(const.host_subnet[HOST_IDS['Enterprise0']])
+        discover_enterprise = RED_DISCOVER_SUBNET_START + enterprise_subnet
         new_state = apply_red_action(foothold_state, jnp.array(discover_enterprise), const, key)
 
-        assert new_state.red_discovered_hosts[HOST_IDS['Enterprise0']]
-        assert new_state.red_discovered_hosts[HOST_IDS['Enterprise1']]
+        assert new_state.red_discovered_hosts_jax[HOST_IDS['Enterprise0']]
+        assert new_state.red_discovered_hosts_jax[HOST_IDS['Enterprise1']]
         assert new_state.last_red_action_success
 
     def test_scan_host(self, const, foothold_state):
@@ -166,23 +168,30 @@ class TestRedActions:
         key = jax.random.PRNGKey(42)
 
         state = foothold_state.replace(
-            red_discovered_hosts=foothold_state.red_discovered_hosts.at[HOST_IDS['Enterprise0']].set(True)
+            red_discovered_hosts_jax=foothold_state.red_discovered_hosts_jax.at[HOST_IDS['Enterprise0']].set(True)
         )
 
         scan_action = RED_SCAN_HOST_START + HOST_IDS['Enterprise0']
         new_state = apply_red_action(state, jnp.array(scan_action), const, key)
 
-        assert new_state.red_scanned_hosts[HOST_IDS['Enterprise0']]
+        assert new_state.red_scanned_hosts_jax[HOST_IDS['Enterprise0']]
         assert new_state.last_red_action_success
 
-    def test_scan_fails_if_not_discovered(self, const, foothold_state):
-        """Test that scan fails if host not discovered."""
+    def test_scan_unreachable_subnet_fails(self, const, foothold_state):
+        """Test that scan fails if target subnet is not reachable.
+
+        The scan action uses routing (subnet adjacency), not discovery state.
+        The action mask enforces discovery requirement, but the action itself
+        just checks routing. This tests the routing check.
+        """
         key = jax.random.PRNGKey(42)
 
-        scan_action = RED_SCAN_HOST_START + HOST_IDS['Enterprise0']
+        # Operational subnet is not reachable from User (blocked by NACLs)
+        op_subnet = int(const.host_subnet[HOST_IDS['Op_Server0']])
+        scan_action = RED_SCAN_HOST_START + HOST_IDS['Op_Server0']
         new_state = apply_red_action(foothold_state, jnp.array(scan_action), const, key)
 
-        assert not new_state.red_scanned_hosts[HOST_IDS['Enterprise0']]
+        assert not new_state.red_scanned_hosts_jax[HOST_IDS['Op_Server0']]
         assert not new_state.last_red_action_success
 
     def test_exploit_success(self, const, foothold_state):
@@ -190,8 +199,8 @@ class TestRedActions:
         key = jax.random.PRNGKey(42)
 
         state = foothold_state.replace(
-            red_discovered_hosts=foothold_state.red_discovered_hosts.at[HOST_IDS['Enterprise0']].set(True),
-            red_scanned_hosts=foothold_state.red_scanned_hosts.at[HOST_IDS['Enterprise0']].set(True),
+            red_discovered_hosts_jax=foothold_state.red_discovered_hosts_jax.at[HOST_IDS['Enterprise0']].set(True),
+            red_scanned_hosts_jax=foothold_state.red_scanned_hosts_jax.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         from jaxmarl.environments.cage.state import EXPLOIT_IDS, NUM_HOSTS
@@ -267,9 +276,15 @@ class TestActionMasks:
         """Test DiscoverRemoteSystems mask based on Red's reach."""
         mask = get_red_action_mask(foothold_state, const)
 
-        assert mask[RED_DISCOVER_SUBNET_START + 0]  # User subnet
-        assert mask[RED_DISCOVER_SUBNET_START + 1]  # Enterprise subnet
-        assert not mask[RED_DISCOVER_SUBNET_START + 2]
+        # Get subnet indices dynamically
+        user_subnet = int(const.host_subnet[HOST_IDS['User0']])
+        enterprise_subnet = int(const.host_subnet[HOST_IDS['Enterprise0']])
+        op_subnet = int(const.host_subnet[HOST_IDS['Op_Server0']])
+
+        # Red starts on User0, can reach User and Enterprise, but not Operational
+        assert mask[RED_DISCOVER_SUBNET_START + user_subnet]  # User subnet
+        assert mask[RED_DISCOVER_SUBNET_START + enterprise_subnet]  # Enterprise subnet
+        assert not mask[RED_DISCOVER_SUBNET_START + op_subnet]  # Operational (blocked)
 
     def test_red_scan_mask(self, const, foothold_state):
         """Test scan mask based on discovered hosts."""

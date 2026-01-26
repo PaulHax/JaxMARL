@@ -80,7 +80,7 @@ def get_red_obs(state: CageState, const: CageConst) -> chex.Array:
           - user_access: Red has user-level access
           - privileged_access: Red has privileged access
     """
-    scanned = state.red_scanned_hosts.astype(jnp.float32)
+    scanned = state.red_scanned_hosts_jax.astype(jnp.float32)
     user_access = (state.red_privilege >= COMPROMISE_USER).astype(jnp.float32)
     privileged_access = (state.red_privilege >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
 
