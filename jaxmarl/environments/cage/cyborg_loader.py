@@ -6,6 +6,7 @@ stays in sync with CybORG's scenario definitions without manual duplication.
 """
 
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import yaml
@@ -290,11 +291,13 @@ def load_scenario_from_cyborg(
     )
 
 
+@lru_cache(maxsize=4)
 def get_scenario_from_cyborg(scenario_name: str = 'Scenario2') -> ScenarioConfig:
     """Get a scenario config, loading from CybORG YAML files.
 
     This is the main entry point for loading scenarios. It attempts to load
     from CybORG files and raises an error if CybORG is not available.
+    Results are cached for fast subsequent access.
 
     Args:
         scenario_name: Name of the scenario to load
