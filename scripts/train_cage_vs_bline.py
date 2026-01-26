@@ -14,8 +14,9 @@ Each run creates an experiment directory with:
 Usage:
     python scripts/train_cage_vs_bline.py
     python scripts/train_cage_vs_bline.py --seed 42 --total_timesteps 1000000
-    python scripts/train_cage_vs_bline.py --wandb_mode online  # upload to wandb cloud
-    python scripts/train_cage_vs_bline.py --wandb_mode disabled  # no wandb
+
+View experiments:
+    mlflow ui  # then open http://localhost:5000
 """
 
 import argparse
@@ -28,7 +29,7 @@ from functools import partial
 from pathlib import Path
 
 import jax
-import wandb
+import mlflow
 import jax.numpy as jnp
 import optax
 from flax import linen as nn
@@ -335,25 +336,34 @@ python scripts/train_cage_vs_bline.py \\
   --max_grad_norm {args.max_grad_norm} \\
   --hidden_dim {args.hidden_dim} \\
   --activation {args.activation} \\
-  --experiment_dir {args.experiment_dir} \\
-  --wandb_mode {args.wandb_mode}
+  --experiment_dir {args.experiment_dir}
 """
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    wandb.init(
-        project="cage-jax",
-        name=exp_name,
-        config=config,
-        mode=args.wandb_mode,
-        dir=str(exp_dir),
-    )
+    mlflow.set_experiment("cage-jax")
+    mlflow.start_run(run_name=exp_name)
+    mlflow.log_params({
+        "seed": args.seed,
+        "num_envs": args.num_envs,
+        "total_timesteps": args.total_timesteps,
+        "rollout_steps": args.rollout_steps,
+        "ppo_epochs": args.ppo_epochs,
+        "minibatch_size": args.minibatch_size,
+        "lr": args.lr,
+        "ent_coef": args.ent_coef,
+        "max_grad_norm": args.max_grad_norm,
+        "hidden_dim": args.hidden_dim,
+        "activation": args.activation,
+        "scenario": "scenario2",
+        "red_agent": "bline",
+    })
 
     return exp_dir, config
 
 
 class MetricsLogger:
-    """Logs to both JSONL file and wandb."""
+    """Logs to both JSONL file and MLflow."""
 
     def __init__(self, filepath):
         self.filepath = Path(filepath)
@@ -363,11 +373,13 @@ class MetricsLogger:
         self.file.write(json.dumps(metrics) + "\n")
         self.file.flush()
         if "final" not in metrics:
-            wandb.log(metrics)
+            step = metrics.get("steps", metrics.get("update", 0))
+            mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))}, step=step)
 
     def close(self):
         self.file.close()
-        wandb.finish()
+        mlflow.log_artifact(str(self.filepath))
+        mlflow.end_run()
 
 
 def train(args):
@@ -536,9 +548,6 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--experiment_dir", type=str, default="experiments",
                         help="Base directory for experiment outputs")
-    parser.add_argument("--wandb_mode", type=str, default="offline",
-                        choices=["online", "offline", "disabled"],
-                        help="Wandb mode: online (cloud), offline (local), disabled")
     args = parser.parse_args()
 
     train(args)
