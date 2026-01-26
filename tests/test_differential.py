@@ -426,7 +426,6 @@ class TestCybORGDifferential:
             assert cyborg_comp == jax_comp, \
                 f"{hostname} compromise mismatch: CybORG={cyborg_comp}, JAX={jax_comp}"
 
-    @pytest.mark.xfail(reason="Reward calculation differs - JAX uses simplified rewards")
     def test_bline_trajectory_comparison(self, harness):
         """B_lineAgent trajectory should match between environments."""
         result = harness.run_bline_episode(sleep_policy, use_jax_bline=False)

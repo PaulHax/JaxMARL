@@ -161,12 +161,16 @@ class TestTrajectoryEquivalence:
 
         key = jax.random.PRNGKey(42)
 
+        # Get User subnet index dynamically
+        user_subnet = int(jax_env.const.host_subnet[HOST_IDS['User0']])
+        discover_user_action = RED_DISCOVER_SUBNET_START + user_subnet
+
         cyborg_env.step('Red', DiscoverRemoteSystems(session=0, agent='Red', subnet='User'))
 
         key, subkey = jax.random.split(key)
         actions = {
             'blue': jnp.array(BLUE_SLEEP),
-            'red': jnp.array(RED_DISCOVER_SUBNET_START),
+            'red': jnp.array(discover_user_action),
         }
         _, jax_state, _, _, _ = jax_env.step_env(subkey, jax_state, actions)
 

@@ -169,26 +169,37 @@ class TestActionStructureEquivalence:
         assert int(target_host) == HOST_IDS['User4']
 
     def test_decode_decoy_action(self):
-        """Verify Decoy actions decode correctly."""
-        const = create_scenario2_const()
+        """Verify Decoy actions decode correctly.
 
-        # DecoyApache on Defender (action 28)
-        action_type, target_host, decoy_type = decode_blue_action(28, const)
+        CybORG decoy action layout: decoy_type * num_decoy_hosts + host_index
+        So decoy type is the outer loop, host is inner loop.
+        """
+        const = create_scenario2_const()
+        from jaxmarl.environments.cage.actions import get_blue_action_offsets
+
+        _, _, decoy_start, _ = get_blue_action_offsets(const)
+
+        # DecoyApache on Defender (first decoy action)
+        # Action = decoy_start + DecoyApache(0) * num_hosts + Defender_idx(0)
+        action_apache_defender = decoy_start + DECOY_IDS['DecoyApache'] * const.num_decoy_hosts + 0
+        action_type, target_host, decoy_type = decode_blue_action(action_apache_defender, const)
         assert int(action_type) == 5  # Decoy
         assert int(target_host) == HOST_IDS['Defender']
         assert int(decoy_type) == DECOY_IDS['DecoyApache']
 
-        # DecoyFemitter on Defender (action 29)
-        action_type, target_host, decoy_type = decode_blue_action(29, const)
+        # DecoyApache on Enterprise0 (next action after Defender)
+        action_apache_ent0 = decoy_start + DECOY_IDS['DecoyApache'] * const.num_decoy_hosts + 1
+        action_type, target_host, decoy_type = decode_blue_action(action_apache_ent0, const)
+        assert int(action_type) == 5  # Decoy
+        assert int(target_host) == HOST_IDS['Enterprise0']
+        assert int(decoy_type) == DECOY_IDS['DecoyApache']
+
+        # DecoyFemitter on Defender
+        action_femitter_defender = decoy_start + DECOY_IDS['DecoyFemitter'] * const.num_decoy_hosts + 0
+        action_type, target_host, decoy_type = decode_blue_action(action_femitter_defender, const)
         assert int(action_type) == 5  # Decoy
         assert int(target_host) == HOST_IDS['Defender']
         assert int(decoy_type) == DECOY_IDS['DecoyFemitter']
-
-        # DecoyVsftpd on User4 (action 131)
-        action_type, target_host, decoy_type = decode_blue_action(131, const)
-        assert int(action_type) == 5  # Decoy
-        assert int(target_host) == HOST_IDS['User4']
-        assert int(decoy_type) == DECOY_IDS['DecoyVsftpd']
 
     def test_decode_restore_action(self):
         """Verify Restore actions decode correctly."""
