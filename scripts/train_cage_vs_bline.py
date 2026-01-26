@@ -341,8 +341,10 @@ python scripts/train_cage_vs_bline.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_experiment("cage-jax")
+    mlflow.set_tracking_uri("file:///home/paulhax/src/cyber/mlruns")
+    mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name=exp_name)
+    mlflow.set_tag("codebase", "jaxmarl")
     mlflow.log_params({
         "seed": args.seed,
         "num_envs": args.num_envs,
