@@ -14,16 +14,11 @@ from jaxmarl.environments.cage.state import CageConst
 from jaxmarl.environments.cage.actions import get_red_action_offsets
 
 
-# B_lineAgent target hosts for Scenario2 (matching CybORG alphabetical order)
-# Host indices (alphabetical): Defender=0, Enterprise0=1, Enterprise1=2, Enterprise2=3,
-#              Op_Host0=4, Op_Host1=5, Op_Host2=6, Op_Server0=7,
-#              User0=8, User1=9, User2=10, User3=11, User4=12
-# Subnet indices are looked up dynamically from const.host_subnet since they
-# depend on the order subnets appear in the config file.
-BLINE_USER_HOST = 9   # User1 - initial target in User subnet
-BLINE_ENTERPRISE0 = 1
-BLINE_ENTERPRISE2 = 3
-BLINE_OP_SERVER0 = 7
+# B_lineAgent target hosts are now looked up dynamically from CageConst
+# to support scaled scenarios where host indices differ from Scenario2.
+# The target host names (User1, Enterprise0, Enterprise2, Op_Server0) are
+# consistent across scenarios, but their indices vary based on alphabetical
+# ordering of all hosts in the scenario.
 
 # Jump-back table: on failure at state i, jump to state BLINE_JUMP_BACK[i]
 # FSM has 16 states (0-15) for complete B_lineAgent attack path
@@ -153,62 +148,68 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
     - Impact: impact_start + host_idx
 
     16-state FSM for complete B_lineAgent attack path.
-    Subnet indices are looked up dynamically from const.host_subnet.
+    Host and subnet indices are looked up dynamically from const for scenario compatibility.
     """
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
+    # Get target host indices from const (looked up by name for scenario compatibility)
+    user_host = const.bline_user_host
+    enterprise0 = const.bline_enterprise0
+    enterprise2 = const.bline_enterprise2
+    op_server0 = const.bline_op_server0
+
     # Get subnet indices dynamically from host_subnet
-    user_subnet = const.host_subnet[BLINE_USER_HOST]
-    enterprise_subnet = const.host_subnet[BLINE_ENTERPRISE0]
-    operational_subnet = const.host_subnet[BLINE_OP_SERVER0]
+    user_subnet = const.host_subnet[user_host]
+    enterprise_subnet = const.host_subnet[enterprise0]
+    operational_subnet = const.host_subnet[op_server0]
 
     def state_0(_):  # DiscoverSubnet(User)
         return discover_start + user_subnet
 
     def state_1(_):  # ScanHost(User1)
-        return scan_start + BLINE_USER_HOST
+        return scan_start + user_host
 
     def state_2(_):  # Exploit(User1)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + BLINE_USER_HOST
+        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + user_host
 
     def state_3(_):  # PrivEsc(User1)
-        return privesc_start + BLINE_USER_HOST
+        return privesc_start + user_host
 
     def state_4(_):  # DiscoverSubnet(Enterprise)
         return discover_start + enterprise_subnet
 
     def state_5(_):  # ScanHost(Enterprise0)
-        return scan_start + BLINE_ENTERPRISE0
+        return scan_start + enterprise0
 
     def state_6(_):  # Exploit(Enterprise0)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + BLINE_ENTERPRISE0
+        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + enterprise0
 
     def state_7(_):  # PrivEsc(Enterprise0)
-        return privesc_start + BLINE_ENTERPRISE0
+        return privesc_start + enterprise0
 
     def state_8(_):  # ScanHost(Enterprise2)
-        return scan_start + BLINE_ENTERPRISE2
+        return scan_start + enterprise2
 
     def state_9(_):  # Exploit(Enterprise2)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + BLINE_ENTERPRISE2
+        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + enterprise2
 
     def state_10(_):  # PrivEsc(Enterprise2)
-        return privesc_start + BLINE_ENTERPRISE2
+        return privesc_start + enterprise2
 
     def state_11(_):  # DiscoverSubnet(Operational)
         return discover_start + operational_subnet
 
     def state_12(_):  # ScanHost(Op_Server0)
-        return scan_start + BLINE_OP_SERVER0
+        return scan_start + op_server0
 
     def state_13(_):  # Exploit(Op_Server0)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + BLINE_OP_SERVER0
+        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + op_server0
 
     def state_14(_):  # PrivEsc(Op_Server0)
-        return privesc_start + BLINE_OP_SERVER0
+        return privesc_start + op_server0
 
     def state_15(_):  # Impact(Op_Server0)
-        return impact_start + BLINE_OP_SERVER0
+        return impact_start + op_server0
 
     action = jax.lax.switch(
         fsm_state,
