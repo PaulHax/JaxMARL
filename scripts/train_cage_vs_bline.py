@@ -273,37 +273,66 @@ def compute_gae(rewards, values, dones, gamma=0.99, gae_lambda=0.95):
     return advantages, returns
 
 
-def ppo_loss(params, apply_fn, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, clip_eps=0.2, vf_coef=0.5, ent_coef=0.01):
+def ppo_loss_with_metrics(params, apply_fn, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, clip_eps=0.2, vf_coef=0.5, ent_coef=0.01):
     """PPO clipped objective loss with distrax distribution (following JaxMARL IPPO).
 
-    Action masking is applied inside the network.
+    Returns (total_loss, metrics_dict) for logging.
     """
-    # Network returns (pi, value) where pi is a distrax.Categorical with masked logits
     pi, values = apply_fn(params, obs, avail_mask)
     log_probs = pi.log_prob(actions)
 
-    # Policy loss with clipped ratio
     logratio = log_probs - old_log_probs
     ratio = jnp.exp(logratio)
     clipped_ratio = jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
     policy_loss = -jnp.mean(jnp.minimum(ratio * advantages, clipped_ratio * advantages))
 
-    # Value clipping (following JaxMARL IPPO)
     value_pred_clipped = old_values + jnp.clip(values - old_values, -clip_eps, clip_eps)
     value_losses = jnp.square(values - returns)
     value_losses_clipped = jnp.square(value_pred_clipped - returns)
     value_loss = 0.5 * jnp.mean(jnp.maximum(value_losses, value_losses_clipped))
 
-    # Entropy from distrax distribution (automatically handles masking)
     entropy = pi.entropy().mean()
 
-    return policy_loss + vf_coef * value_loss - ent_coef * entropy
+    # Approx KL divergence: mean((ratio - 1) - logratio)
+    approx_kl = jnp.mean((ratio - 1) - logratio)
+
+    # Explained variance: how well value function predicts returns
+    var_returns = jnp.var(returns)
+    explained_var = jnp.where(
+        var_returns > 0,
+        1 - jnp.var(returns - values) / var_returns,
+        0.0
+    )
+
+    # Clip fraction: how often ratio is clipped
+    clip_frac = jnp.mean(jnp.abs(ratio - 1) > clip_eps)
+
+    total_loss = policy_loss + vf_coef * value_loss - ent_coef * entropy
+
+    metrics = {
+        "entropy": entropy,
+        "approx_kl": approx_kl,
+        "explained_var": explained_var,
+        "clip_frac": clip_frac,
+        "policy_loss": policy_loss,
+        "value_loss": value_loss,
+    }
+
+    return total_loss, metrics
+
+
+def ppo_loss(params, apply_fn, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, clip_eps=0.2, vf_coef=0.5, ent_coef=0.01):
+    """PPO loss (returns only total loss for backward compat)."""
+    loss, _ = ppo_loss_with_metrics(
+        params, apply_fn, obs, actions, old_log_probs, old_values,
+        advantages, returns, avail_mask, clip_eps, vf_coef, ent_coef
+    )
+    return loss
 
 
 @jax.jit
 def update_agent(train_state, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, ent_coef=0.01):
     """Update agent with PPO using distrax."""
-    # Normalize advantages per-minibatch (following IPPO)
     advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
     loss, grads = jax.value_and_grad(ppo_loss)(
         train_state.params, train_state.apply_fn,
@@ -312,6 +341,25 @@ def update_agent(train_state, obs, actions, old_log_probs, old_values, advantage
     )
     train_state = train_state.apply_gradients(grads=grads)
     return train_state, loss
+
+
+@jax.jit
+def update_agent_with_metrics(train_state, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, ent_coef=0.01):
+    """Update agent and return detailed metrics for logging."""
+    advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
+    loss, grads = jax.value_and_grad(ppo_loss)(
+        train_state.params, train_state.apply_fn,
+        obs, actions, old_log_probs, old_values, advantages, returns,
+        avail_mask, ent_coef=ent_coef
+    )
+    train_state = train_state.apply_gradients(grads=grads)
+
+    _, metrics = ppo_loss_with_metrics(
+        train_state.params, train_state.apply_fn,
+        obs, actions, old_log_probs, old_values, advantages, returns,
+        avail_mask, ent_coef=ent_coef
+    )
+    return train_state, loss, metrics
 
 
 def save_policy(params, filepath):
@@ -599,7 +647,8 @@ def train(args):
             num_minibatches = args.num_minibatches
             minibatch_size = batch_size // num_minibatches
 
-        for _ in range(args.ppo_epochs):
+        ppo_metrics = None
+        for epoch in range(args.ppo_epochs):
             key, key_perm = jax.random.split(key)
             perm = jax.random.permutation(key_perm, batch_size)
 
@@ -608,17 +657,31 @@ def train(args):
                 mb_end = mb_start + minibatch_size
                 mb_indices = perm[mb_start:mb_end]
 
-                train_state_blue, loss_blue = update_agent(
-                    train_state_blue,
-                    obs_blue[mb_indices],
-                    actions_blue[mb_indices],
-                    log_probs_blue[mb_indices],
-                    values_blue[mb_indices],
-                    adv_blue_flat[mb_indices],
-                    ret_blue_flat[mb_indices],
-                    avail_blue[mb_indices],
-                    ent_coef=args.ent_coef,
-                )
+                is_last = (epoch == args.ppo_epochs - 1) and (mb_idx == num_minibatches - 1)
+                if is_last:
+                    train_state_blue, loss_blue, ppo_metrics = update_agent_with_metrics(
+                        train_state_blue,
+                        obs_blue[mb_indices],
+                        actions_blue[mb_indices],
+                        log_probs_blue[mb_indices],
+                        values_blue[mb_indices],
+                        adv_blue_flat[mb_indices],
+                        ret_blue_flat[mb_indices],
+                        avail_blue[mb_indices],
+                        ent_coef=args.ent_coef,
+                    )
+                else:
+                    train_state_blue, loss_blue = update_agent(
+                        train_state_blue,
+                        obs_blue[mb_indices],
+                        actions_blue[mb_indices],
+                        log_probs_blue[mb_indices],
+                        values_blue[mb_indices],
+                        adv_blue_flat[mb_indices],
+                        ret_blue_flat[mb_indices],
+                        avail_blue[mb_indices],
+                        ent_coef=args.ent_coef,
+                    )
 
         completed_returns, completed_lengths = extract_episode_stats(
             transitions['reward_blue'], transitions['done']
@@ -633,7 +696,7 @@ def train(args):
             recent_blue = float(jnp.mean(jnp.array(episode_returns_blue[-100:])))
             recent_len = float(jnp.mean(jnp.array(episode_lengths_blue[-100:]))) if episode_lengths_blue else 0.0
 
-            metrics_logger.log({
+            log_dict = {
                 "update": update + 1,
                 "steps": total_steps,
                 "sps": round(sps),
@@ -641,12 +704,25 @@ def train(args):
                 "ep_len_mean": round(recent_len, 2),
                 "loss": round(float(loss_blue), 4),
                 "elapsed_sec": round(elapsed, 1),
-            })
+            }
 
+            if ppo_metrics is not None:
+                log_dict.update({
+                    "entropy": round(float(ppo_metrics["entropy"]), 4),
+                    "approx_kl": round(float(ppo_metrics["approx_kl"]), 6),
+                    "explained_var": round(float(ppo_metrics["explained_var"]), 4),
+                    "clip_frac": round(float(ppo_metrics["clip_frac"]), 4),
+                    "policy_loss": round(float(ppo_metrics["policy_loss"]), 4),
+                    "value_loss": round(float(ppo_metrics["value_loss"]), 4),
+                })
+
+            metrics_logger.log(log_dict)
+
+            entropy_str = f" | Entropy: {ppo_metrics['entropy']:.3f}" if ppo_metrics else ""
             print(f"Update {update+1}/{num_updates} | "
                   f"Steps: {total_steps:,} | "
                   f"SPS: {sps:.0f} | "
-                  f"Blue Reward: {recent_blue:.1f}")
+                  f"Blue Reward: {recent_blue:.1f}{entropy_str}")
 
         if cyborg_eval_enabled and args.eval_interval > 0:
             if total_steps >= last_eval_step + args.eval_interval:
