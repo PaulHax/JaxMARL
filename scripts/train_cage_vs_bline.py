@@ -25,6 +25,7 @@ View experiments:
 
 import argparse
 import json
+import os
 import subprocess
 import time
 import pickle
@@ -440,7 +441,7 @@ python scripts/train_cage_vs_bline.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_tracking_uri("file:./mlruns")
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
     mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name=exp_name)
     mlflow.set_tag("codebase", "jaxmarl")
