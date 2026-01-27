@@ -43,7 +43,7 @@ CONFIDENTIALITY_MAP = {
     'None': 0.0,
     'Low': 0.1,
     'Medium': 1.0,
-    'High': 1.0,
+    'High': 10.0,
 }
 
 # Availability value mapping from CybORG strings to numeric values
