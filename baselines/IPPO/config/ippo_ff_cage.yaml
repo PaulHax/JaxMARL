@@ -1,0 +1,28 @@
+"LR": 2.5e-4
+"NUM_ENVS": 16
+"NUM_STEPS": 128
+"TOTAL_TIMESTEPS": 3e6
+"UPDATE_EPOCHS": 4
+"NUM_MINIBATCHES": 4
+"GAMMA": 0.99
+"GAE_LAMBDA": 0.95
+"CLIP_EPS": 0.2
+"ENT_COEF": 0.01
+"VF_COEF": 0.5
+"MAX_GRAD_NORM": 0.5
+"ACTIVATION": "tanh"
+"HIDDEN_DIM": 64
+"ENV_NAME": "HeuristicRedCAGE"
+"ENV_KWARGS":
+  scenario: "Scenario2"
+  max_steps: 100
+"ANNEAL_LR": True
+"SEED": 0
+"NUM_SEEDS": 1
+
+# MLflow/WandB Params
+"ENTITY": ""
+"PROJECT": "cage-training"
+"WANDB_MODE": "disabled"
+"MLFLOW_EXPERIMENT": "cage-training"
+"EXPERIMENT_DIR": "experiments"
