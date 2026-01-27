@@ -127,7 +127,7 @@ from jaxmarl.environments.cage.scripted_agents import (
 
 
 class ActorCritic(nn.Module):
-    """Simple actor-critic network."""
+    """Actor-critic network with orthogonal initialization (matching JaxMARL IPPO)."""
     action_dim: int
     hidden_dim: int = 256
     activation: str = "tanh"
@@ -135,12 +135,35 @@ class ActorCritic(nn.Module):
     @nn.compact
     def __call__(self, x):
         act_fn = nn.tanh if self.activation == "tanh" else nn.relu
-        x = nn.Dense(self.hidden_dim)(x)
+
+        # Hidden layers with orthogonal init (scale sqrt(2) for ReLU/tanh)
+        x = nn.Dense(
+            self.hidden_dim,
+            kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nn.initializers.constant(0.0),
+        )(x)
         x = act_fn(x)
-        x = nn.Dense(self.hidden_dim)(x)
+        x = nn.Dense(
+            self.hidden_dim,
+            kernel_init=nn.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nn.initializers.constant(0.0),
+        )(x)
         x = act_fn(x)
-        logits = nn.Dense(self.action_dim)(x)
-        value = nn.Dense(1)(x)
+
+        # Actor head with small init (0.01) to keep initial policy near uniform
+        logits = nn.Dense(
+            self.action_dim,
+            kernel_init=nn.initializers.orthogonal(0.01),
+            bias_init=nn.initializers.constant(0.0),
+        )(x)
+
+        # Critic head with standard init (1.0)
+        value = nn.Dense(
+            1,
+            kernel_init=nn.initializers.orthogonal(1.0),
+            bias_init=nn.initializers.constant(0.0),
+        )(x)
+
         return logits, value.squeeze(-1)
 
 
@@ -728,8 +751,8 @@ def main():
     parser.add_argument("--minibatch_size", type=int, default=64,
                         help="Minibatch size for PPO updates (SB3 default: 64, 0 = full batch)")
     parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--ent_coef", type=float, default=0.0,
-                        help="Entropy coefficient (SB3 default: 0.0)")
+    parser.add_argument("--ent_coef", type=float, default=0.01,
+                        help="Entropy coefficient (IPPO default: 0.01, encourages exploration)")
     parser.add_argument("--max_grad_norm", type=float, default=0.5,
                         help="Max gradient norm for clipping (SB3 default: 0.5, 0 = no clipping)")
     parser.add_argument("--hidden_dim", type=int, default=256,
