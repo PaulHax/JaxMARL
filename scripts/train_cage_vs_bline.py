@@ -117,8 +117,8 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
         "resilience_std": results[8],
         "reward_std": results[9],
     }
-from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS
-from jaxmarl.environments.cage.observations import BLUE_OBS_DIM
+from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, compute_blue_action_space_size
+from jaxmarl.environments.cage.observations import BLUE_OBS_DIM, compute_blue_obs_dim
 from jaxmarl.environments.cage.scripted_agents import (
     BLineState,
     bline_reset_batched,
@@ -384,8 +384,8 @@ def setup_experiment(args):
             "max_grad_norm": args.max_grad_norm,
         },
         "environment": {
-            "scenario": "scenario2",
-            "max_steps": 100,
+            "scenario": args.scenario,
+            "max_steps": args.max_steps,
             "red_agent": "bline",
         },
         "network": {
@@ -426,6 +426,8 @@ cd {Path(__file__).parent.parent.resolve()}
 
 python scripts/train_cage_vs_bline.py \\
   --seed {args.seed} \\
+  --scenario {args.scenario} \\
+  --max_steps {args.max_steps} \\
   --num_envs {args.num_envs} \\
   --total_timesteps {args.total_timesteps} \\
   --rollout_steps {args.rollout_steps} \\
@@ -458,7 +460,7 @@ python scripts/train_cage_vs_bline.py \\
         "max_grad_norm": args.max_grad_norm,
         "hidden_dim": args.hidden_dim,
         "activation": args.activation,
-        "scenario": "Scenario2",
+        "scenario": args.scenario,
         "red_agent": "bline",
         "eval_interval": args.eval_interval,
         "eval_episodes": args.eval_episodes,
@@ -501,10 +503,18 @@ def train(args):
         else:
             print("Warning: CybORG evaluation requested but CybORG not available")
 
+    key = jax.random.PRNGKey(args.seed)
+    env = CageEnv(scenario=args.scenario, max_steps=args.max_steps)
+
+    obs_dim = compute_blue_obs_dim(env.const)
+    action_dim = compute_blue_action_space_size(env.const)
+
     print("=" * 60)
     print("CAGE-JAX PPO Training: Blue vs B_lineAgent")
     print("=" * 60)
     print(f"Experiment dir: {exp_dir}")
+    print(f"Scenario: {args.scenario} ({env.const.num_hosts} hosts)")
+    print(f"Obs dim: {obs_dim}, Action dim: {action_dim}")
     print(f"JAX devices: {jax.devices()}")
     print(f"Num envs: {args.num_envs}, rollout_steps: {args.rollout_steps}")
     print(f"Total timesteps: {args.total_timesteps:,}")
@@ -515,12 +525,9 @@ def train(args):
         print(f"CybORG eval: every {args.eval_interval:,} steps, {args.eval_episodes} episodes")
     print("=" * 60)
 
-    key = jax.random.PRNGKey(args.seed)
-    env = CageEnv(max_steps=100)
-
     key, key_blue = jax.random.split(key)
     train_state_blue = create_train_state(
-        key_blue, BLUE_OBS_DIM, NUM_BLUE_ACTIONS, args.lr,
+        key_blue, obs_dim, action_dim, args.lr,
         hidden_dim=args.hidden_dim, activation=args.activation,
         max_grad_norm=args.max_grad_norm
     )
@@ -731,6 +738,11 @@ def main():
                         choices=["relu", "tanh"],
                         help="Activation function for actor-critic network")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--scenario", type=str, default="Scenario2",
+                        choices=["Scenario2", "hosts_2", "hosts_3", "hosts_4", "hosts_5"],
+                        help="Scenario to use (default: Scenario2 with 13 hosts)")
+    parser.add_argument("--max_steps", type=int, default=100,
+                        help="Max steps per episode (default: 100)")
     parser.add_argument("--experiment_dir", type=str, default="experiments",
                         help="Base directory for experiment outputs")
     parser.add_argument("--eval_interval", type=int, default=0,
