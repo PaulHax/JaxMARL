@@ -592,8 +592,12 @@ def _apply_exploit(
     # Deterministic: success if host scanned, has vulnerable service, and no decoy
     success = host_scanned & has_vulnerable_service & ~decoy_present
 
-    # HarakaRCE(4), EternalBlue(6), BlueKeep(7) give root directly (run as root/SYSTEM)
-    gives_root = (exploit_type == 4) | (exploit_type == 6) | (exploit_type == 7)
+    # Exploits that give root/SYSTEM directly based on what user the service runs as:
+    # - HarakaRCE(4): SMTP/Haraka runs as root
+    # - SQLInjection(5): MySQL runs as root
+    # - EternalBlue(6): SMB runs as SYSTEM
+    # - BlueKeep(7): RDP runs as SYSTEM
+    gives_root = (exploit_type == 4) | (exploit_type == 5) | (exploit_type == 6) | (exploit_type == 7)
 
     target_privilege = jnp.where(gives_root, COMPROMISE_PRIVILEGED, COMPROMISE_USER)
 
