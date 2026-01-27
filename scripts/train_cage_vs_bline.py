@@ -31,6 +31,7 @@ from pathlib import Path
 import jax
 import mlflow
 import jax.numpy as jnp
+import numpy as np
 import optax
 from flax import linen as nn
 from flax.training.train_state import TrainState
@@ -243,21 +244,25 @@ def extract_episode_stats(rewards, dones):
     Returns:
         Tuple of (episode_returns, episode_lengths) for completed episodes
     """
-    num_steps, num_envs = rewards.shape
+    # Transfer to CPU once (avoid per-element GPU->CPU transfers)
+    rewards_np = np.asarray(rewards)
+    dones_np = np.asarray(dones)
+
+    num_steps, num_envs = rewards_np.shape
     episode_returns = []
     episode_lengths = []
-    current_returns = [0.0] * num_envs
-    current_lengths = [0] * num_envs
+    current_returns = np.zeros(num_envs)
+    current_lengths = np.zeros(num_envs, dtype=np.int32)
 
     for t in range(num_steps):
-        for e in range(num_envs):
-            current_returns[e] += float(rewards[t, e])
-            current_lengths[e] += 1
-            if dones[t, e]:
-                episode_returns.append(current_returns[e])
-                episode_lengths.append(current_lengths[e])
-                current_returns[e] = 0.0
-                current_lengths[e] = 0
+        current_returns += rewards_np[t]
+        current_lengths += 1
+        done_mask = dones_np[t]
+        if np.any(done_mask):
+            episode_returns.extend(current_returns[done_mask].tolist())
+            episode_lengths.extend(current_lengths[done_mask].tolist())
+            current_returns[done_mask] = 0.0
+            current_lengths[done_mask] = 0
 
     return episode_returns, episode_lengths
 
@@ -347,7 +352,7 @@ python scripts/train_cage_vs_bline.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_tracking_uri("file:///home/paulhax/src/cyber/mlruns")
+    mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name=exp_name)
     mlflow.set_tag("codebase", "jaxmarl")
