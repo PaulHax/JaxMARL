@@ -218,7 +218,7 @@ def decode_red_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.A
         action - scan_start,
         jnp.where(
             (action >= exploit_start) & (action < privesc_start),
-            (action - exploit_start) % const.num_hosts,
+            (action - exploit_start) // const.num_exploits,
             jnp.where(
                 (action >= privesc_start) & (action < impact_start),
                 action - privesc_start,
@@ -233,7 +233,7 @@ def decode_red_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.A
 
     exploit_type = jnp.where(
         (action >= exploit_start) & (action < privesc_start),
-        (action - exploit_start) // const.num_hosts,
+        (action - exploit_start) % const.num_exploits,
         -1,
     )
 
@@ -408,6 +408,7 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
         ot_service_stopped=state.ot_service_stopped.at[target_host].set(False),
         host_activity_detected=state.host_activity_detected.at[target_host].set(False),
         host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
+        host_has_malware=state.host_has_malware.at[target_host].set(False),
     )
 
 
@@ -659,9 +660,16 @@ def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> Cag
         state.host_compromised[target_host],
     )
 
+    new_malware = jnp.where(
+        success,
+        True,
+        state.host_has_malware[target_host],
+    )
+
     return state.replace(
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
+        host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
             state.red_activity_this_step[target_host] | success
         ),
@@ -755,15 +763,15 @@ def get_red_action_mask(state: CageState, const: CageConst) -> chex.Array:
     mask = jax.lax.fori_loop(0, const.num_hosts, check_scan, mask)
 
     # Exploit: need scanned host
-    def check_exploit_type(e, mask):
-        def check_exploit_host(i, mask):
-            exploit_action_idx = exploit_start + e * const.num_hosts + i
+    def check_exploit_host(i, mask):
+        def check_exploit_type(e, mask):
+            exploit_action_idx = exploit_start + i * const.num_exploits + e
             exploit_valid = state.red_scanned_hosts_jax[i]
             return mask.at[exploit_action_idx].set(exploit_valid)
 
-        return jax.lax.fori_loop(0, const.num_hosts, check_exploit_host, mask)
+        return jax.lax.fori_loop(0, const.num_exploits, check_exploit_type, mask)
 
-    mask = jax.lax.fori_loop(0, const.num_exploits, check_exploit_type, mask)
+    mask = jax.lax.fori_loop(0, const.num_hosts, check_exploit_host, mask)
 
     # PrivilegeEscalate: need user session
     def check_privesc(i, mask):

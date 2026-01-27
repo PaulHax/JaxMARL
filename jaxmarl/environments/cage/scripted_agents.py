@@ -170,7 +170,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
         return scan_start + user_host
 
     def state_2(_):  # Exploit(User1)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + user_host
+        return exploit_start + user_host * const.num_exploits + BLINE_EXPLOIT_TYPE
 
     def state_3(_):  # PrivEsc(User1)
         return privesc_start + user_host
@@ -182,7 +182,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
         return scan_start + enterprise0
 
     def state_6(_):  # Exploit(Enterprise0)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + enterprise0
+        return exploit_start + enterprise0 * const.num_exploits + BLINE_EXPLOIT_TYPE
 
     def state_7(_):  # PrivEsc(Enterprise0)
         return privesc_start + enterprise0
@@ -191,7 +191,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
         return scan_start + enterprise2
 
     def state_9(_):  # Exploit(Enterprise2)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + enterprise2
+        return exploit_start + enterprise2 * const.num_exploits + BLINE_EXPLOIT_TYPE
 
     def state_10(_):  # PrivEsc(Enterprise2)
         return privesc_start + enterprise2
@@ -203,7 +203,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
         return scan_start + op_server0
 
     def state_13(_):  # Exploit(Op_Server0)
-        return exploit_start + BLINE_EXPLOIT_TYPE * const.num_hosts + op_server0
+        return exploit_start + op_server0 * const.num_exploits + BLINE_EXPLOIT_TYPE
 
     def state_14(_):  # PrivEsc(Op_Server0)
         return privesc_start + op_server0
