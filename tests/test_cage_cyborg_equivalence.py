@@ -243,14 +243,19 @@ class TestObservationEncodingEquivalence:
         assert list(host_obs) == [0, 0, 0, 0], f"Clean host obs: {list(host_obs)}"
 
     def test_scanned_host_encoding(self):
-        """Scanned-only host should encode as [1, 0, 0, 0] when detected."""
+        """Scanned-only host should encode as [1, 0, 0, 0] during scan step.
+
+        Scans without Red session only show during the step they happen
+        (via red_activity_this_step). After that step, they're not visible
+        unless Red establishes a session.
+        """
         env = CageEnv()
         _, state = env.reset(jax.random.PRNGKey(0))
 
         host_idx = HOST_IDS['Enterprise0']
         state = state.replace(
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
-            host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
+            red_activity_this_step=state.red_activity_this_step.at[host_idx].set(True),
         )
         obs = get_blue_obs(state, env.const)
 

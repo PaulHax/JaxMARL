@@ -247,7 +247,7 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     # Monitor (action_type == 1): detect activity on all hosts, clear unknown flags
     state = jax.lax.cond(
         action_type == 1,  # Monitor
-        lambda s: _apply_monitor(s),
+        lambda s: _apply_monitor(s, const),
         lambda s: s,
         state,
     )
@@ -255,7 +255,7 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     # Analyse (action_type == 2): detect activity on target host, clear unknown flag
     state = jax.lax.cond(
         action_type == 2,  # Analyse
-        lambda s: _apply_analyse(s, target_host),
+        lambda s: _apply_analyse(s, target_host, const),
         lambda s: s,
         state,
     )
@@ -284,27 +284,47 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     return state
 
 
-def _apply_monitor(state: CageState) -> CageState:
+def _apply_monitor(state: CageState, const: CageConst) -> CageState:
     """Monitor action: detect red activity on all hosts, clear unknown flags.
 
-    CybORG behavior: Monitor only detects RECENT activity (actions taken this step),
-    not pre-existing compromise state. The initial foothold is not detected unless
-    Red takes a visible action.
+    CybORG behavior: Monitor detects anomalies from Red's presence. Since
+    observations show Red sessions as persistent anomalies, Monitor should
+    also detect these. The initial foothold is hidden (part of baseline).
     """
+    # Detect recent activity
+    recent_activity = state.red_activity_this_step
+
+    # Detect persistent Red presence (sessions), excluding initial foothold
+    # This matches what observations show to Blue
+    # Use zeros_like for JIT compatibility (can't use const.num_hosts directly in some contexts)
+    has_red_presence = state.red_sessions > 0
+    initial_foothold_mask = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
+    initial_foothold_mask = initial_foothold_mask.at[const.red_start_hosts].set(True)
+    visible_presence = has_red_presence & ~initial_foothold_mask
+
     return state.replace(
-        host_activity_detected=state.host_activity_detected | state.red_activity_this_step,
+        host_activity_detected=state.host_activity_detected | recent_activity | visible_presence,
         host_observation_unknown=jnp.zeros_like(state.host_observation_unknown),
     )
 
 
-def _apply_analyse(state: CageState, target_host: int) -> CageState:
+def _apply_analyse(state: CageState, target_host: int, const: CageConst) -> CageState:
     """Analyse action: detect activity on target host, clear its unknown flag.
 
-    CybORG behavior: Analyse detects recent activity on the target host.
+    CybORG behavior: Analyse detects anomalies on the target host, including
+    persistent Red presence (matching what observations show).
     """
-    has_activity = state.red_activity_this_step[target_host]
+    # Detect recent activity OR persistent Red presence on target host
+    has_recent_activity = state.red_activity_this_step[target_host]
+    has_red_session = state.red_sessions[target_host] > 0
+
+    # Check if this is the initial foothold (hidden from Blue)
+    is_initial_foothold = jnp.any(const.red_start_hosts == target_host)
+    visible_presence = has_red_session & ~is_initial_foothold
+
+    should_detect = has_recent_activity | visible_presence
     new_detected = jnp.where(
-        has_activity,
+        should_detect,
         state.host_activity_detected.at[target_host].set(True),
         state.host_activity_detected,
     )
