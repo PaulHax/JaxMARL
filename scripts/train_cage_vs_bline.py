@@ -212,6 +212,7 @@ def ppo_loss(params, apply_fn, obs, actions, old_logits, advantages, returns, av
     return policy_loss + vf_coef * value_loss - ent_coef * entropy
 
 
+@jax.jit
 def update_agent(train_state, obs, actions, old_logits, advantages, returns, avail_mask=None, ent_coef=0.0):
     """Update agent with PPO."""
     loss, grads = jax.value_and_grad(ppo_loss)(
@@ -232,28 +233,33 @@ def save_policy(params, filepath):
     print(f"Saved policy to {filepath}")
 
 
-def extract_episode_returns(rewards, dones):
-    """Extract completed episode returns from a rollout.
+def extract_episode_stats(rewards, dones):
+    """Extract completed episode returns and lengths from a rollout.
 
     Args:
         rewards: Array of shape (num_steps, num_envs)
         dones: Array of shape (num_steps, num_envs), True at episode boundaries
 
     Returns:
-        List of episode returns (one per completed episode in the rollout)
+        Tuple of (episode_returns, episode_lengths) for completed episodes
     """
     num_steps, num_envs = rewards.shape
     episode_returns = []
+    episode_lengths = []
     current_returns = [0.0] * num_envs
+    current_lengths = [0] * num_envs
 
     for t in range(num_steps):
         for e in range(num_envs):
             current_returns[e] += float(rewards[t, e])
+            current_lengths[e] += 1
             if dones[t, e]:
                 episode_returns.append(current_returns[e])
+                episode_lengths.append(current_lengths[e])
                 current_returns[e] = 0.0
+                current_lengths[e] = 0
 
-    return episode_returns
+    return episode_returns, episode_lengths
 
 
 def get_git_commit():
@@ -346,18 +352,19 @@ python scripts/train_cage_vs_bline.py \\
     mlflow.start_run(run_name=exp_name)
     mlflow.set_tag("codebase", "jaxmarl")
     mlflow.log_params({
+        "policy_type": "MlpPolicy",
         "seed": args.seed,
         "num_envs": args.num_envs,
         "total_timesteps": args.total_timesteps,
         "rollout_steps": args.rollout_steps,
         "ppo_epochs": args.ppo_epochs,
         "minibatch_size": args.minibatch_size,
-        "lr": args.lr,
+        "learning_rate": args.lr,
         "ent_coef": args.ent_coef,
         "max_grad_norm": args.max_grad_norm,
         "hidden_dim": args.hidden_dim,
         "activation": args.activation,
-        "scenario": "scenario2",
+        "scenario": "Scenario2",
         "red_agent": "bline",
     })
 
@@ -421,6 +428,7 @@ def train(args):
 
     total_steps = 0
     episode_returns_blue = []
+    episode_lengths_blue = []
 
     print("\nTraining Blue against B_lineAgent...")
     start_time = time.perf_counter()
@@ -476,22 +484,25 @@ def train(args):
                     ent_coef=args.ent_coef,
                 )
 
-        completed_returns = extract_episode_returns(
+        completed_returns, completed_lengths = extract_episode_stats(
             transitions['reward_blue'], transitions['done']
         )
         episode_returns_blue.extend(completed_returns)
+        episode_lengths_blue.extend(completed_lengths)
 
         if (update + 1) % 10 == 0 or update == 0:
             elapsed = time.perf_counter() - start_time
             sps = total_steps / elapsed
 
             recent_blue = float(jnp.mean(jnp.array(episode_returns_blue[-100:])))
+            recent_len = float(jnp.mean(jnp.array(episode_lengths_blue[-100:]))) if episode_lengths_blue else 0.0
 
             metrics_logger.log({
                 "update": update + 1,
                 "steps": total_steps,
                 "sps": round(sps),
-                "blue_reward": round(recent_blue, 2),
+                "ep_rew_mean": round(recent_blue, 2),
+                "ep_len_mean": round(recent_len, 2),
                 "loss": round(float(loss_blue), 4),
                 "elapsed_sec": round(elapsed, 1),
             })

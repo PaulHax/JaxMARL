@@ -285,18 +285,24 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
 
 
 def _apply_monitor(state: CageState) -> CageState:
-    """Monitor action: detect red activity on all hosts, clear unknown flags."""
-    # Detect activity where red has sessions or hosts are compromised
-    activity = (state.red_sessions > 0) | (state.host_compromised > 0)
+    """Monitor action: detect red activity on all hosts, clear unknown flags.
+
+    CybORG behavior: Monitor only detects RECENT activity (actions taken this step),
+    not pre-existing compromise state. The initial foothold is not detected unless
+    Red takes a visible action.
+    """
     return state.replace(
-        host_activity_detected=state.host_activity_detected | activity,
+        host_activity_detected=state.host_activity_detected | state.red_activity_this_step,
         host_observation_unknown=jnp.zeros_like(state.host_observation_unknown),
     )
 
 
 def _apply_analyse(state: CageState, target_host: int) -> CageState:
-    """Analyse action: detect activity on target host, clear its unknown flag."""
-    has_activity = (state.red_sessions[target_host] > 0) | (state.host_compromised[target_host] > 0)
+    """Analyse action: detect activity on target host, clear its unknown flag.
+
+    CybORG behavior: Analyse detects recent activity on the target host.
+    """
+    has_activity = state.red_activity_this_step[target_host]
     new_detected = jnp.where(
         has_activity,
         state.host_activity_detected.at[target_host].set(True),
@@ -515,6 +521,9 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
         red_discovered_hosts_jax=state.red_discovered_hosts_jax.at[target_host].set(
             state.red_discovered_hosts_jax[target_host] | can_scan
         ),
+        red_activity_this_step=state.red_activity_this_step.at[target_host].set(
+            state.red_activity_this_step[target_host] | can_scan
+        ),
         last_red_action_success=can_scan,
     )
 
@@ -583,6 +592,9 @@ def _apply_exploit(
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
         red_sessions=state.red_sessions.at[target_host].set(new_sessions),
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
+        red_activity_this_step=state.red_activity_this_step.at[target_host].set(
+            state.red_activity_this_step[target_host] | success
+        ),
         last_red_action_success=success,
     )
 
@@ -609,6 +621,9 @@ def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> Cag
     return state.replace(
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
+        red_activity_this_step=state.red_activity_this_step.at[target_host].set(
+            state.red_activity_this_step[target_host] | success
+        ),
         last_red_action_success=success,
     )
 
@@ -627,6 +642,9 @@ def _apply_impact(state: CageState, target_host: int, const: CageConst) -> CageS
 
     return state.replace(
         ot_service_stopped=new_ot_stopped,
+        red_activity_this_step=state.red_activity_this_step.at[target_host].set(
+            state.red_activity_this_step[target_host] | success
+        ),
         last_red_action_success=success,
     )
 

@@ -149,9 +149,16 @@ class CageEnv(MultiAgentEnv):
         key, key_red = jax.random.split(key)
 
         # Apply Blue action first (defender gets priority)
+        # Blue can detect red_activity_this_step from PREVIOUS step
         state = apply_blue_action(state, blue_action, self.const)
 
-        # Apply Red action
+        # Clear red activity AFTER Blue acts, BEFORE Red acts
+        # This way Red's actions this step will be detected by Monitor next step
+        state = state.replace(
+            red_activity_this_step=jnp.zeros_like(state.red_activity_this_step)
+        )
+
+        # Apply Red action (sets red_activity_this_step for next step's Monitor)
         state = apply_red_action(state, red_action, self.const, key_red)
 
         # Compute rewards

@@ -113,6 +113,10 @@ class CageState:
     # Unknown observation state - set after Remove, cleared by Monitor/Analyse
     host_observation_unknown: chex.Array  # (max_hosts,) bool: observation should show "Unknown"
 
+    # Red activity this step - tracks hosts where Red took action this step (for Monitor detection)
+    # Cleared at start of each step, set by Red actions. Monitor detects this, not pre-existing state.
+    red_activity_this_step: chex.Array  # (max_hosts,) bool: Red took action on host this step
+
 
 @struct.dataclass
 class CageConst:
@@ -293,6 +297,7 @@ def create_initial_state(const: CageConst) -> CageState:
         ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 
 
