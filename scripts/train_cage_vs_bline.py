@@ -635,6 +635,7 @@ def train(args):
                 eval_time = time.perf_counter() - eval_start
 
                 if cia_results:
+                    mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
                     mlflow.log_metrics({
                         "eval/confidentiality": cia_results["confidentiality"],
                         "eval/integrity": cia_results["integrity"],
@@ -680,6 +681,7 @@ def train(args):
 
     checkpoint_path = exp_dir / "checkpoint_final.pkl"
     save_policy(train_state_blue.params, checkpoint_path)
+    mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
 
     if cyborg_eval_enabled:
         print("\nRunning final CybORG evaluation...")
