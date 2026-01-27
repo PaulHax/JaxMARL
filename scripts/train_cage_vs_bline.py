@@ -11,9 +11,13 @@ Each run creates an experiment directory with:
   - reproduce.sh: Script to reproduce the experiment
   - environment.txt: JAX version and device info
 
+Optional: Periodic CybORG evaluation with CIA metrics (requires CybORG installed).
+  Use --eval_interval to enable and --cyborg_path to specify CybORG location.
+
 Usage:
     python scripts/train_cage_vs_bline.py
-    python scripts/train_cage_vs_bline.py --seed 42 --total_timesteps 1000000
+    python scripts/train_cage_vs_bline.py --seed 42 --total_timesteps 3000000
+    python scripts/train_cage_vs_bline.py --eval_interval 100000 --cyborg_path /path/to/CybORG
 
 View experiments:
     mlflow ui  # then open http://localhost:5000
@@ -40,6 +44,78 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jaxmarl.environments.cage import CageEnv
+
+CYBORG_AVAILABLE = False
+def setup_cyborg_eval(cyborg_path: str):
+    """Set up CybORG imports for evaluation."""
+    global CYBORG_AVAILABLE
+    cyborg_path = Path(cyborg_path)
+    if cyborg_path.exists():
+        sys.path.insert(0, str(cyborg_path))
+        try:
+            from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
+            from CybORG.Agents.SimpleAgents.BlueMonitorAgent import BlueMonitorAgent
+            from CybORG.Agents import B_lineAgent
+            from cage_experiment import CAGEExperiment
+            from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
+            CYBORG_AVAILABLE = True
+            return True
+        except ImportError as e:
+            print(f"Warning: Could not import CybORG components: {e}")
+            return False
+    return False
+
+
+def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
+                       steps: int = 100, seed: int = 42):
+    """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
+
+    Returns dict with: confidentiality, integrity, availability, resilience, reward
+    """
+    if not CYBORG_AVAILABLE:
+        return None
+
+    cyborg_dir = Path(cyborg_path)
+    sys.path.insert(0, str(cyborg_dir))
+
+    from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
+    from CybORG.Agents import B_lineAgent
+    from cage_experiment import CAGEExperiment
+    from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
+
+    agent = JaxPolicyAgent(checkpoint_path)
+    metric = ResilienceMetric()
+
+    cage = CAGEExperiment(
+        agent,
+        red_agent=B_lineAgent,
+        scenario="Scenario2",
+        seed=seed,
+        metric=metric,
+        experiment_export_dir="/tmp/jax_eval",
+        use_wrapper=True
+    )
+    agent.set_env = lambda env: None
+
+    results = cage.run_experiment(
+        episodes=episodes,
+        steps=steps,
+        plot_export_path="eval.png",
+        verbose=False
+    )
+
+    return {
+        "confidentiality": results[0],
+        "integrity": results[1],
+        "availability": results[2],
+        "resilience": results[3],
+        "reward": results[4],
+        "confidentiality_std": results[5],
+        "integrity_std": results[6],
+        "availability_std": results[7],
+        "resilience_std": results[8],
+        "reward_std": results[9],
+    }
 from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS
 from jaxmarl.environments.cage.observations import BLUE_OBS_DIM
 from jaxmarl.environments.cage.scripted_agents import (
@@ -315,6 +391,11 @@ def setup_experiment(args):
             "hidden_dims": [args.hidden_dim, args.hidden_dim],
             "activation": args.activation,
         },
+        "evaluation": {
+            "eval_interval": args.eval_interval,
+            "eval_episodes": args.eval_episodes,
+            "cyborg_path": args.cyborg_path,
+        },
     }
 
     with open(exp_dir / "config.json", "w") as f:
@@ -327,6 +408,13 @@ def setup_experiment(args):
     ]
     with open(exp_dir / "environment.txt", "w") as f:
         f.write("\n".join(env_info))
+
+    eval_args = ""
+    if args.eval_interval > 0:
+        eval_args = f"""  --eval_interval {args.eval_interval} \\
+  --eval_episodes {args.eval_episodes} \\
+  --cyborg_path {args.cyborg_path} \\
+"""
 
     reproduce_script = f"""#!/bin/bash
 # Reproduce experiment: {exp_name}
@@ -347,7 +435,7 @@ python scripts/train_cage_vs_bline.py \\
   --max_grad_norm {args.max_grad_norm} \\
   --hidden_dim {args.hidden_dim} \\
   --activation {args.activation} \\
-  --experiment_dir {args.experiment_dir}
+{eval_args}  --experiment_dir {args.experiment_dir}
 """
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
@@ -371,6 +459,9 @@ python scripts/train_cage_vs_bline.py \\
         "activation": args.activation,
         "scenario": "Scenario2",
         "red_agent": "bline",
+        "eval_interval": args.eval_interval,
+        "eval_episodes": args.eval_episodes,
+        "cyborg_path": args.cyborg_path,
     })
 
     return exp_dir, config
@@ -401,6 +492,14 @@ def train(args):
     exp_dir, config = setup_experiment(args)
     metrics_logger = MetricsLogger(exp_dir / "metrics.jsonl")
 
+    cyborg_eval_enabled = False
+    if args.eval_interval > 0:
+        if setup_cyborg_eval(args.cyborg_path):
+            cyborg_eval_enabled = True
+            print(f"CybORG evaluation enabled every {args.eval_interval:,} steps")
+        else:
+            print("Warning: CybORG evaluation requested but CybORG not available")
+
     print("=" * 60)
     print("CAGE-JAX PPO Training: Blue vs B_lineAgent")
     print("=" * 60)
@@ -411,6 +510,8 @@ def train(args):
     print(f"Network: [{args.hidden_dim}, {args.hidden_dim}] {args.activation}")
     print(f"PPO: epochs={args.ppo_epochs}, minibatch={args.minibatch_size}, ent_coef={args.ent_coef}")
     print(f"Optimizer: lr={args.lr}, max_grad_norm={args.max_grad_norm}")
+    if cyborg_eval_enabled:
+        print(f"CybORG eval: every {args.eval_interval:,} steps, {args.eval_episodes} episodes")
     print("=" * 60)
 
     key = jax.random.PRNGKey(args.seed)
@@ -432,6 +533,7 @@ def train(args):
     bline_states = bline_reset_batched(args.num_envs)
 
     total_steps = 0
+    last_eval_step = 0
     episode_returns_blue = []
     episode_lengths_blue = []
 
@@ -517,6 +619,45 @@ def train(args):
                   f"SPS: {sps:.0f} | "
                   f"Blue Reward: {recent_blue:.1f}")
 
+        if cyborg_eval_enabled and args.eval_interval > 0:
+            if total_steps >= last_eval_step + args.eval_interval:
+                last_eval_step = total_steps
+                checkpoint_path = exp_dir / f"checkpoint_{total_steps}.pkl"
+                save_policy(train_state_blue.params, checkpoint_path)
+
+                print(f"\n  Running CybORG evaluation at {total_steps:,} steps...")
+                eval_start = time.perf_counter()
+                cia_results = evaluate_in_cyborg(
+                    str(checkpoint_path), args.cyborg_path,
+                    episodes=args.eval_episodes, steps=100, seed=args.seed
+                )
+                eval_time = time.perf_counter() - eval_start
+
+                if cia_results:
+                    mlflow.log_metrics({
+                        "eval/confidentiality": cia_results["confidentiality"],
+                        "eval/integrity": cia_results["integrity"],
+                        "eval/availability": cia_results["availability"],
+                        "eval/resilience": cia_results["resilience"],
+                        "eval/cyborg_reward": cia_results["reward"],
+                    }, step=total_steps)
+
+                    metrics_logger.log({
+                        "eval_step": total_steps,
+                        "eval/confidentiality": round(cia_results["confidentiality"], 3),
+                        "eval/integrity": round(cia_results["integrity"], 3),
+                        "eval/availability": round(cia_results["availability"], 3),
+                        "eval/resilience": round(cia_results["resilience"], 3),
+                        "eval/cyborg_reward": round(cia_results["reward"], 2),
+                    })
+
+                    print(f"  CybORG eval ({eval_time:.1f}s): "
+                          f"C={cia_results['confidentiality']:.2f} "
+                          f"I={cia_results['integrity']:.2f} "
+                          f"A={cia_results['availability']:.2f} "
+                          f"R={cia_results['resilience']:.2f} "
+                          f"Reward={cia_results['reward']:.1f}\n")
+
     elapsed = time.perf_counter() - start_time
 
     final_metrics = {
@@ -538,6 +679,29 @@ def train(args):
 
     checkpoint_path = exp_dir / "checkpoint_final.pkl"
     save_policy(train_state_blue.params, checkpoint_path)
+
+    if cyborg_eval_enabled:
+        print("\nRunning final CybORG evaluation...")
+        cia_results = evaluate_in_cyborg(
+            str(checkpoint_path), args.cyborg_path,
+            episodes=args.eval_episodes * 2,
+            steps=100, seed=args.seed
+        )
+        if cia_results:
+            mlflow.log_metrics({
+                "final/confidentiality": cia_results["confidentiality"],
+                "final/integrity": cia_results["integrity"],
+                "final/availability": cia_results["availability"],
+                "final/resilience": cia_results["resilience"],
+                "final/cyborg_reward": cia_results["reward"],
+            }, step=total_steps)
+
+            print("\nFinal CybORG Results:")
+            print(f"  Confidentiality: {cia_results['confidentiality']:.3f} ± {cia_results['confidentiality_std']:.3f}")
+            print(f"  Integrity:       {cia_results['integrity']:.3f} ± {cia_results['integrity_std']:.3f}")
+            print(f"  Availability:    {cia_results['availability']:.3f} ± {cia_results['availability_std']:.3f}")
+            print(f"  Resilience:      {cia_results['resilience']:.3f} ± {cia_results['resilience_std']:.3f}")
+            print(f"  CybORG Reward:   {cia_results['reward']:.2f} ± {cia_results['reward_std']:.2f}")
 
     return train_state_blue
 
@@ -566,6 +730,13 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--experiment_dir", type=str, default="experiments",
                         help="Base directory for experiment outputs")
+    parser.add_argument("--eval_interval", type=int, default=0,
+                        help="Evaluate in CybORG every N steps (0 = disabled)")
+    parser.add_argument("--eval_episodes", type=int, default=10,
+                        help="Number of episodes per CybORG evaluation")
+    parser.add_argument("--cyborg_path", type=str,
+                        default="/home/paulhax/src/cyber/cage-challenge-2/CybORG",
+                        help="Path to CybORG installation for CIA evaluation")
     args = parser.parse_args()
 
     train(args)
