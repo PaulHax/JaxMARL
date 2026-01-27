@@ -3,6 +3,9 @@ IPPO (Independent PPO) for CAGE with HeuristicRedCAGE.
 
 Based on the PureJaxRL Implementation of PPO and ippo_rnn_smax.py.
 Trains Blue agents against scripted B_lineAgent using feedforward networks.
+
+View experiments:
+    mlflow ui  # then open http://localhost:5000
 """
 
 import jax
@@ -16,8 +19,7 @@ from flax.training.train_state import TrainState
 import distrax
 import hydra
 from omegaconf import OmegaConf
-import wandb
-import functools
+import mlflow
 import os
 import json
 import pickle
@@ -26,6 +28,27 @@ from pathlib import Path
 
 import jaxmarl
 from jaxmarl.wrappers.baselines import LogWrapper
+
+
+class MetricsLogger:
+    """Logs to both JSONL file and MLflow."""
+
+    def __init__(self, filepath):
+        self.filepath = Path(filepath)
+        self.file = open(self.filepath, "w")
+
+    def log(self, metrics: dict, step: int = None):
+        self.file.write(json.dumps(metrics) + "\n")
+        self.file.flush()
+        if step is not None:
+            mlflow.log_metrics(
+                {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float, np.floating))},
+                step=step
+            )
+
+    def close(self):
+        self.file.close()
+        mlflow.log_artifact(str(self.filepath))
 
 
 class ActorCritic(nn.Module):
@@ -293,9 +316,8 @@ def make_train(config):
                 update_state = (train_state, traj_batch, advantages, targets, rng)
                 return update_state, loss_info
 
-            def callback(metric):
-                if wandb.run is not None:
-                    wandb.log(metric)
+            def callback(metric, update_idx):
+                pass  # Metrics collected via scan, logged in main
 
             update_state = (train_state, traj_batch, advantages, targets, rng)
             update_state, loss_info = jax.lax.scan(
@@ -309,7 +331,7 @@ def make_train(config):
             loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
             metric = jax.tree.map(lambda x: x.mean(), metric)
             metric = {**metric, **loss_info, **r0}
-            jax.experimental.io_callback(callback, None, metric)
+            jax.experimental.io_callback(callback, None, metric, update_state[0].step)
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
 
@@ -327,6 +349,39 @@ def make_train(config):
 def main(config):
     config = OmegaConf.to_container(config)
 
+    exp_dir = Path(config.get("EXPERIMENT_DIR", "experiments"))
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    exp_name = f"{timestamp}_ippo_ff_cage_seed{config['SEED']}"
+    save_dir = exp_dir / exp_name
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
+    mlflow.set_experiment(config.get("MLFLOW_EXPERIMENT", "cage-training"))
+    mlflow.start_run(run_name=exp_name)
+
+    mlflow.log_params({
+        "algorithm": "IPPO-FF",
+        "seed": config["SEED"],
+        "num_envs": config["NUM_ENVS"],
+        "num_steps": config["NUM_STEPS"],
+        "total_timesteps": config["TOTAL_TIMESTEPS"],
+        "update_epochs": config["UPDATE_EPOCHS"],
+        "num_minibatches": config["NUM_MINIBATCHES"],
+        "learning_rate": config["LR"],
+        "gamma": config["GAMMA"],
+        "gae_lambda": config["GAE_LAMBDA"],
+        "clip_eps": config["CLIP_EPS"],
+        "ent_coef": config["ENT_COEF"],
+        "vf_coef": config["VF_COEF"],
+        "max_grad_norm": config["MAX_GRAD_NORM"],
+        "hidden_dim": config.get("HIDDEN_DIM", 64),
+        "activation": config["ACTIVATION"],
+        "anneal_lr": config["ANNEAL_LR"],
+        "env_name": config["ENV_NAME"],
+        "scenario": config["ENV_KWARGS"].get("scenario", "Scenario2"),
+        "max_steps": config["ENV_KWARGS"].get("max_steps", 100),
+    })
+
     print("=" * 60)
     print("IPPO-FF CAGE Training: Blue vs B_lineAgent")
     print("=" * 60)
@@ -338,15 +393,11 @@ def main(config):
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 64)}")
     print(f"Activation: {config['ACTIVATION']}")
     print(f"Seeds: {config.get('NUM_SEEDS', 1)}")
+    print(f"Experiment dir: {save_dir}")
     print("=" * 60)
 
-    wandb.init(
-        entity=config["ENTITY"],
-        project=config["PROJECT"],
-        tags=["IPPO", "FF", "CAGE"],
-        config=config,
-        mode=config["WANDB_MODE"],
-    )
+    import time
+    start_time = time.perf_counter()
 
     rng = jax.random.PRNGKey(config["SEED"])
     num_seeds = config.get("NUM_SEEDS", 1)
@@ -359,27 +410,62 @@ def main(config):
         train_jit = jax.jit(make_train(config))
         out = train_jit(rng)
 
-    exp_dir = Path(config.get("EXPERIMENT_DIR", "experiments"))
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    exp_name = f"{timestamp}_ippo_ff_cage_seed{config['SEED']}"
-    save_dir = exp_dir / exp_name
-    save_dir.mkdir(parents=True, exist_ok=True)
+    elapsed = time.perf_counter() - start_time
+    total_steps = int(config["TOTAL_TIMESTEPS"])
+    sps = total_steps / elapsed
 
     with open(save_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
+
+    metrics_logger = MetricsLogger(save_dir / "metrics.jsonl")
+
+    metrics = out["metrics"]
+    num_updates = int(config["NUM_UPDATES"])
+    steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
+
+    for update_idx in range(num_updates):
+        step = (update_idx + 1) * steps_per_update
+        update_metrics = {
+            "update": update_idx + 1,
+            "steps": step,
+            "returned_episode_returns": float(metrics["returned_episode_returns"][update_idx].mean()),
+            "returned_episode_lengths": float(metrics["returned_episode_lengths"][update_idx].mean()),
+            "total_loss": float(metrics["total_loss"][update_idx].mean()),
+            "actor_loss": float(metrics["actor_loss"][update_idx].mean()),
+            "critic_loss": float(metrics["critic_loss"][update_idx].mean()),
+            "entropy": float(metrics["entropy"][update_idx].mean()),
+        }
+        metrics_logger.log(update_metrics, step=step)
+
+    metrics_logger.close()
 
     if num_seeds > 1:
         params = jax.tree.map(lambda x: x[0], out["runner_state"][0][0].params)
     else:
         params = out["runner_state"][0].params
 
-    with open(save_dir / "checkpoint_final.pkl", "wb") as f:
+    checkpoint_path = save_dir / "checkpoint_final.pkl"
+    with open(checkpoint_path, "wb") as f:
         pickle.dump({"params": params}, f)
 
-    print(f"\nTraining complete! Saved to: {save_dir}")
-    print(f"Final returns: {out['metrics']['returned_episode_returns'][-1].mean():.2f}")
+    mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
+    mlflow.log_artifact(str(save_dir / "config.json"))
 
-    wandb.finish()
+    final_return = float(metrics["returned_episode_returns"][-1].mean())
+    mlflow.log_metrics({
+        "final/episode_return": final_return,
+        "final/wall_time_sec": elapsed,
+        "final/throughput_sps": sps,
+    }, step=total_steps)
+
+    mlflow.end_run()
+
+    print(f"\nTraining complete!")
+    print(f"Wall time: {elapsed:.1f}s")
+    print(f"Throughput: {sps:,.0f} steps/sec")
+    print(f"Final returns: {final_return:.2f}")
+    print(f"Saved to: {save_dir}")
+    print(f"View in MLflow: mlflow ui")
 
 
 if __name__ == "__main__":

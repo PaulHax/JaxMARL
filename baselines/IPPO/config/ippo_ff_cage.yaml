@@ -20,9 +20,6 @@
 "SEED": 0
 "NUM_SEEDS": 1
 
-# MLflow/WandB Params
-"ENTITY": ""
-"PROJECT": "cage-training"
-"WANDB_MODE": "disabled"
+# Logging
 "MLFLOW_EXPERIMENT": "cage-training"
 "EXPERIMENT_DIR": "experiments"
