@@ -528,6 +528,10 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
     )
 
 
+# CybORG detection rate: 95% of exploits are detected by Blue (via Monitor/Analyse)
+EXPLOIT_DETECTION_RATE = 0.95
+
+
 def _apply_exploit(
     state: CageState,
     target_host: int,
@@ -546,6 +550,9 @@ def _apply_exploit(
 
     Exploit indices that give PRIVILEGED: HarakaRCE (4)
     All others give USER level and require PrivEsc for root.
+
+    Detection: 95% of successful exploits generate detectable activity (matching CybORG).
+    The remaining 5% succeed silently - Blue cannot detect them even with Monitor.
     """
     host_scanned = state.red_scanned_hosts_jax[target_host]
 
@@ -588,23 +595,33 @@ def _apply_exploit(
         state.red_privilege[target_host],
     )
 
+    # Detection: 95% of exploits are detectable (matching CybORG's detection_rate = 0.95)
+    # 5% of exploits succeed silently and cannot be detected by Blue
+    is_detected = jax.random.uniform(key) < EXPLOIT_DETECTION_RATE
+    activity_visible = success & is_detected
+
     return state.replace(
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
         red_sessions=state.red_sessions.at[target_host].set(new_sessions),
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            state.red_activity_this_step[target_host] | success
+            state.red_activity_this_step[target_host] | activity_visible
         ),
         last_red_action_success=success,
     )
 
 
 def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> CageState:
-    """Escalate privileges on target host."""
-    has_user_session = state.red_privilege[target_host] >= COMPROMISE_USER
-    random_success = jax.random.uniform(key) < 0.9
+    """Escalate privileges on target host.
 
-    success = has_user_session & random_success
+    CybORG behavior: PrivilegeEscalate is deterministic - if Red has a user session
+    and the OS is compatible with the escalation method (JuicyPotato for Windows,
+    V4L2KernelExploit for Linux), escalation always succeeds.
+    """
+    has_user_session = state.red_privilege[target_host] >= COMPROMISE_USER
+
+    # Deterministic success matching CybORG (no random failure)
+    success = has_user_session
 
     new_privilege = jnp.where(
         success,
