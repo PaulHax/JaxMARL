@@ -667,24 +667,19 @@ def _apply_impact(state: CageState, target_host: int, const: CageConst) -> CageS
 
 
 def get_blue_action_mask(state: CageState, const: CageConst) -> chex.Array:
-    """Return valid action mask for blue agent.
-
-    Matches CybORG's training action mask which masks out Sleep and Remove actions.
-    This forces the agent to always take productive actions (Monitor, Analyse, Decoy, Restore).
-    """
+    """Return valid action mask for blue agent."""
     action_size = compute_blue_action_space_size(const)
     mask = jnp.ones(action_size, dtype=jnp.bool_)
     analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)
 
-    # Sleep (action 0) is masked out - CybORG training never allows Sleep
-    mask = mask.at[0].set(False)
+    # Remove only valid if activity detected AND host has user-level (not privileged) access
+    def check_remove(i, mask):
+        activity_detected = state.host_activity_detected[i]
+        is_user_level = state.red_privilege[i] == COMPROMISE_USER
+        remove_valid = activity_detected & is_user_level
+        return mask.at[remove_start + i].set(remove_valid)
 
-    # Remove actions are masked out - CybORG training masks Remove to avoid wasted actions
-    # (Remove only works on user-level compromise, which is a narrow window before privesc)
-    def mask_remove(i, mask):
-        return mask.at[remove_start + i].set(False)
-
-    mask = jax.lax.fori_loop(0, const.num_hosts, mask_remove, mask)
+    mask = jax.lax.fori_loop(0, const.num_hosts, check_remove, mask)
 
     # Decoys only if not already deployed and OS is compatible
     # (Port conflicts are checked at execution time, matching CybORG behavior)
