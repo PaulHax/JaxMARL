@@ -36,11 +36,9 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
         Activity:    None=[0,0], Scan=[1,0], Exploit=[1,1]
         Compromised: No=[0,0],   User=[0,1], Priv=[1,1], Unknown=[1,0]
 
-    CybORG's BlueTableWrapper automatically detects anomalies by comparing
-    current host state (processes/files) to baseline. This means:
-    - Red's presence (sessions) creates detectable anomalies
-    - Anomalies persist until Blue does Restore (which resets to baseline)
-    - Blue does NOT need to explicitly Monitor to see anomalies
+    CybORG's BlueTableWrapper behavior:
+    - Activity is TRANSIENT: only shows during the step Red takes an action
+    - Compromise is PERSISTENT: stays as long as Red has a session on the host
 
     Red's initial foothold (User0) is hidden because it's part of the baseline.
     After Remove action, compromised shows "Unknown" [1,0] until Restore.
@@ -50,29 +48,28 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
         [activity_0, activity_1, compromised_0, compromised_1]
     """
     # Red's initial foothold host (User0) is hidden from Blue
-    # This is because in CybORG, the initial state IS the baseline
-    # Use zeros_like for JIT compatibility (can't use const.num_hosts directly)
     initial_foothold_mask = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
     initial_foothold_mask = initial_foothold_mask.at[const.red_start_hosts].set(True)
 
     # Activity encoding: None=[0,0], Scan=[1,0], Exploit=[1,1]
-    # Blue sees activity when Red has sessions (persistent anomaly)
-    # or when recent activity was detected via Monitor
-    has_red_presence = state.red_sessions > 0
-    recent_scan = state.red_activity_this_step & ~has_red_presence
+    # CybORG activity is TRANSIENT - only shows during the step Red acts
+    red_activity = state.red_activity_this_step & ~initial_foothold_mask
+    has_session = state.red_sessions > 0
 
-    # Hide initial foothold from observation (matches CybORG baseline behavior)
-    visible_presence = has_red_presence & ~initial_foothold_mask
-
-    # activity_0 = 1 if any activity (scan or exploit)
-    # activity_1 = 1 if exploit (Red has session)
-    activity_0 = (visible_presence | recent_scan).astype(jnp.float32)
-    activity_1 = visible_presence.astype(jnp.float32)
+    # activity_0 = 1 if Red acted on this host this step
+    # activity_1 = 1 if Red has session (exploit succeeded)
+    activity_0 = red_activity.astype(jnp.float32)
+    activity_1 = (red_activity & has_session).astype(jnp.float32)
 
     # Compromised encoding: No=[0,0], User=[0,1], Priv=[1,1], Unknown=[1,0]
-    # Blue sees compromise level for hosts where Red has visible presence
-    compromised_0 = (visible_presence & (state.host_compromised >= COMPROMISE_PRIVILEGED)).astype(jnp.float32)
-    compromised_1 = (visible_presence & (state.host_compromised >= COMPROMISE_USER)).astype(jnp.float32)
+    # CybORG's BlueTableWrapper detects:
+    # - User: when shell connection detected (port 4444) → has_session
+    # - Privileged: when malware detected (density >= 0.9) → host_has_malware
+    # Note: Red may have higher actual privilege than Blue can observe
+    visible_session = has_session & ~initial_foothold_mask
+    has_malware = state.host_has_malware & ~initial_foothold_mask
+    compromised_0 = has_malware.astype(jnp.float32)
+    compromised_1 = visible_session.astype(jnp.float32)
 
     # After Remove, compromised shows Unknown [1,0] until Restore
     compromised_0 = jnp.where(state.host_observation_unknown, 1.0, compromised_0)

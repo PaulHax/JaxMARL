@@ -26,15 +26,15 @@ HOST_IDS = {
 # Reverse lookup
 HOST_NAMES = {v: k for k, v in HOST_IDS.items()}
 
-# Subnet IDs
-SUBNET_IDS = {'User': 0, 'Enterprise': 1, 'Operational': 2}
+# Subnet IDs (alphabetical order to match CybORG loader)
+SUBNET_IDS = {'Enterprise': 0, 'Operational': 1, 'User': 2}
 
-# Host to subnet mapping (matching alphabetical host order)
+# Host to subnet mapping (matching alphabetical host order and subnet order)
 HOST_SUBNET = jnp.array([
-    1,              # Defender -> Enterprise subnet
-    1, 1, 1,        # Enterprise0-2 -> Enterprise subnet
-    2, 2, 2, 2,     # Op_Host0-2, Op_Server0 -> Operational subnet
-    0, 0, 0, 0, 0,  # User0-4 -> User subnet
+    0,              # Defender -> Enterprise subnet
+    0, 0, 0,        # Enterprise0-2 -> Enterprise subnet
+    1, 1, 1, 1,     # Op_Host0-2, Op_Server0 -> Operational subnet
+    2, 2, 2, 2, 2,  # User0-4 -> User subnet
 ], dtype=jnp.int32)
 
 # Service IDs
@@ -116,6 +116,11 @@ class CageState:
     # Red activity this step - tracks hosts where Red took action this step (for Monitor detection)
     # Cleared at start of each step, set by Red actions. Monitor detects this, not pre-existing state.
     red_activity_this_step: chex.Array  # (max_hosts,) bool: Red took action on host this step
+
+    # Malware presence - tracks detectable privilege escalation for Blue observations
+    # In CybORG, Blue detects Privileged compromise via malware files (Density >= 0.9)
+    # This is separate from Red's actual privilege level
+    host_has_malware: chex.Array  # (max_hosts,) bool: malware present (from PrivilegeEscalate)
 
 
 @struct.dataclass
@@ -314,6 +319,7 @@ def create_initial_state(const: CageConst) -> CageState:
         host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
         red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_has_malware=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 
 
