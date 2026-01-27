@@ -29,6 +29,8 @@ from .environments import (
     OvercookedV2,
     CoinGame,
     JaxNav,
+    CageEnv,
+    HeuristicRedCAGE,
     SUBMODULE_ENVIRONMENTS
 )
 
@@ -130,6 +132,12 @@ def make(env_id: str, **env_kwargs):
     elif env_id == "jaxnav":
         env = JaxNav(**env_kwargs)
 
+    # 10. CAGE environments
+    elif env_id == "CAGE":
+        env = CageEnv(**env_kwargs)
+    elif env_id == "HeuristicRedCAGE":
+        env = HeuristicRedCAGE(**env_kwargs)
+
     if SUBMODULE_ENVIRONMENTS:
         # 10. JaxRobotarium Environments
         if env_id == "JaxRobotarium_navigation":
@@ -189,5 +197,7 @@ registered_envs = [
     "JaxRobotarium_arctic_transport",
     "JaxRobotarium_foraging",
     "JaxRobotarium_rware",
-    "JaxRobotarium_predator_prey"
+    "JaxRobotarium_predator_prey",
+    "CAGE",
+    "HeuristicRedCAGE",
 ]

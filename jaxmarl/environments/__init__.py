@@ -36,6 +36,8 @@ _IMPORT_MAP = {
     'InTheMatrix': ('.storm', 'InTheMatrix'),
     'CoinGame': ('.coin_game', 'CoinGame'),
     'JaxNav': ('.jaxnav', 'JaxNav'),
+    'CageEnv': ('.cage', 'CageEnv'),
+    'HeuristicRedCAGE': ('.cage', 'HeuristicRedCAGE'),
 }
 
 def __getattr__(name):

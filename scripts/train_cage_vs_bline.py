@@ -38,8 +38,11 @@ import mlflow
 import jax.numpy as jnp
 import numpy as np
 import optax
+import distrax
 from flax import linen as nn
+from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
+import numpy as np
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -127,49 +130,70 @@ from jaxmarl.environments.cage.scripted_agents import (
 
 
 class ActorCritic(nn.Module):
-    """Simple actor-critic network."""
+    """Actor-critic network with orthogonal initialization and action masking (following JaxMARL IPPO)."""
     action_dim: int
-    hidden_dim: int = 256
+    hidden_dim: int = 64
     activation: str = "tanh"
 
     @nn.compact
-    def __call__(self, x):
+    def __call__(self, x, avail_actions=None):
         act_fn = nn.tanh if self.activation == "tanh" else nn.relu
-        x = nn.Dense(self.hidden_dim)(x)
-        x = act_fn(x)
-        x = nn.Dense(self.hidden_dim)(x)
-        x = act_fn(x)
-        logits = nn.Dense(self.action_dim)(x)
-        value = nn.Dense(1)(x)
-        return logits, value.squeeze(-1)
+        # Actor
+        actor = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        actor = act_fn(actor)
+        actor = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor)
+        actor = act_fn(actor)
+        logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor)
+
+        # Apply action masking (following SMAX IPPO pattern)
+        if avail_actions is not None:
+            unavail_actions = 1 - avail_actions
+            logits = logits - (unavail_actions * 1e10)
+
+        pi = distrax.Categorical(logits=logits)
+
+        # Critic
+        critic = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        critic = act_fn(critic)
+        critic = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(critic)
+        critic = act_fn(critic)
+        value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+        return pi, value.squeeze(-1)
 
 
-def create_train_state(key, obs_dim, action_dim, learning_rate=3e-4, hidden_dim=256, activation="tanh", max_grad_norm=0.5):
+def create_train_state(key, obs_dim, action_dim, learning_rate=3e-4, hidden_dim=256,
+                       activation="tanh", max_grad_norm=0.5, num_updates=1, anneal_lr=True):
     """Create training state for an agent."""
     network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation=activation)
     dummy_obs = jnp.zeros((1, obs_dim))
-    params = network.init(key, dummy_obs)
+    dummy_avail = jnp.ones((1, action_dim))
+    params = network.init(key, dummy_obs, dummy_avail)
+
+    if anneal_lr:
+        lr_schedule = optax.linear_schedule(
+            init_value=learning_rate,
+            end_value=0.0,
+            transition_steps=num_updates
+        )
+    else:
+        lr_schedule = learning_rate
+
     if max_grad_norm > 0:
         tx = optax.chain(
             optax.clip_by_global_norm(max_grad_norm),
-            optax.adam(learning_rate),
+            optax.adam(lr_schedule, eps=1e-5),
         )
     else:
-        tx = optax.adam(learning_rate)
+        tx = optax.adam(lr_schedule, eps=1e-5)
     return TrainState.create(apply_fn=network.apply, params=params, tx=tx)
 
 
-def sample_action(key, logits, avail_mask):
-    """Sample action from policy logits with action masking."""
-    masked_logits = jnp.where(avail_mask, logits, -1e10)
-    return jax.random.categorical(key, masked_logits)
-
-
-@partial(jax.jit, static_argnums=[1, 5])
-def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=128):
+@partial(jax.jit, static_argnums=[1, 5, 6])
+def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=128, reward_scale=0.01):
     """Collect rollout data from parallel environments.
 
-    Uses learned Blue policy and fixed B_lineAgent for Red.
+    Uses learned Blue policy (with distrax) and fixed B_lineAgent for Red.
+    Rewards are scaled by reward_scale to improve learning stability.
     """
 
     def step_fn(carry, _):
@@ -177,18 +201,14 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
 
         key, key_blue, key_red, key_step = jax.random.split(key, 4)
 
-        # Blue: learned policy
-        blue_logits, blue_values = train_state_blue.apply_fn(
-            train_state_blue.params, obs['blue']
-        )
-
         avail = jax.vmap(env.get_avail_actions)(env_states)
 
-        blue_actions = jax.vmap(sample_action)(
-            jax.random.split(key_blue, env_states.time.shape[0]),
-            blue_logits,
-            avail['blue']
+        # Blue: learned policy with action masking via distrax
+        pi, blue_values = train_state_blue.apply_fn(
+            train_state_blue.params, obs['blue'], avail['blue']
         )
+        blue_actions = pi.sample(seed=key_blue)
+        blue_log_probs = pi.log_prob(blue_actions)
 
         # Red: fixed B_lineAgent
         red_keys = jax.random.split(key_red, env_states.time.shape[0])
@@ -214,10 +234,10 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
         transition = {
             'obs_blue': obs['blue'],
             'action_blue': blue_actions,
-            'reward_blue': rewards['blue'],
+            'reward_blue': rewards['blue'] * reward_scale,
             'done': dones['__all__'],
             'value_blue': blue_values,
-            'logits_blue': blue_logits,
+            'log_prob_blue': blue_log_probs,
             'avail_blue': avail['blue'],
         }
 
@@ -253,50 +273,42 @@ def compute_gae(rewards, values, dones, gamma=0.99, gae_lambda=0.95):
     return advantages, returns
 
 
-def ppo_loss(params, apply_fn, obs, actions, old_logits, advantages, returns, avail_mask=None, clip_eps=0.2, vf_coef=0.5, ent_coef=0.0):
-    """PPO clipped objective loss with proper action masking.
+def ppo_loss(params, apply_fn, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, clip_eps=0.2, vf_coef=0.5, ent_coef=0.01):
+    """PPO clipped objective loss with distrax distribution (following JaxMARL IPPO).
 
-    Follows SB3's MaskablePPO approach: masked actions don't contribute to entropy.
+    Action masking is applied inside the network.
     """
-    logits, values = apply_fn(params, obs)
+    # Network returns (pi, value) where pi is a distrax.Categorical with masked logits
+    pi, values = apply_fn(params, obs, avail_mask)
+    log_probs = pi.log_prob(actions)
 
-    # Apply action masking to logits for probability computation
-    if avail_mask is not None:
-        masked_logits = jnp.where(avail_mask, logits, -1e10)
-        masked_old_logits = jnp.where(avail_mask, old_logits, -1e10)
-    else:
-        masked_logits = logits
-        masked_old_logits = old_logits
-
-    log_probs = jax.nn.log_softmax(masked_logits)
-    old_log_probs = jax.nn.log_softmax(masked_old_logits)
-
-    action_log_probs = jnp.take_along_axis(log_probs, actions[:, None], axis=1).squeeze()
-    old_action_log_probs = jnp.take_along_axis(old_log_probs, actions[:, None], axis=1).squeeze()
-
-    ratio = jnp.exp(action_log_probs - old_action_log_probs)
+    # Policy loss with clipped ratio
+    logratio = log_probs - old_log_probs
+    ratio = jnp.exp(logratio)
     clipped_ratio = jnp.clip(ratio, 1 - clip_eps, 1 + clip_eps)
-
     policy_loss = -jnp.mean(jnp.minimum(ratio * advantages, clipped_ratio * advantages))
-    value_loss = jnp.mean((values - returns) ** 2)
 
-    # Compute entropy only over valid actions (following MaskablePPO)
-    probs = jax.nn.softmax(masked_logits)
-    p_log_p = probs * log_probs
-    if avail_mask is not None:
-        p_log_p = jnp.where(avail_mask, p_log_p, 0.0)
-    entropy = -jnp.mean(jnp.sum(p_log_p, axis=-1))
+    # Value clipping (following JaxMARL IPPO)
+    value_pred_clipped = old_values + jnp.clip(values - old_values, -clip_eps, clip_eps)
+    value_losses = jnp.square(values - returns)
+    value_losses_clipped = jnp.square(value_pred_clipped - returns)
+    value_loss = 0.5 * jnp.mean(jnp.maximum(value_losses, value_losses_clipped))
+
+    # Entropy from distrax distribution (automatically handles masking)
+    entropy = pi.entropy().mean()
 
     return policy_loss + vf_coef * value_loss - ent_coef * entropy
 
 
 @jax.jit
-def update_agent(train_state, obs, actions, old_logits, advantages, returns, avail_mask=None, ent_coef=0.0):
-    """Update agent with PPO."""
+def update_agent(train_state, obs, actions, old_log_probs, old_values, advantages, returns, avail_mask, ent_coef=0.01):
+    """Update agent with PPO using distrax."""
+    # Normalize advantages per-minibatch (following IPPO)
+    advantages = (advantages - jnp.mean(advantages)) / (jnp.std(advantages) + 1e-8)
     loss, grads = jax.value_and_grad(ppo_loss)(
         train_state.params, train_state.apply_fn,
-        obs, actions, old_logits, advantages, returns,
-        avail_mask=avail_mask, ent_coef=ent_coef
+        obs, actions, old_log_probs, old_values, advantages, returns,
+        avail_mask, ent_coef=ent_coef
     )
     train_state = train_state.apply_gradients(grads=grads)
     return train_state, loss
@@ -376,7 +388,9 @@ def setup_experiment(args):
             "rollout_steps": args.rollout_steps,
             "ppo_epochs": args.ppo_epochs,
             "minibatch_size": args.minibatch_size,
+            "num_minibatches": args.num_minibatches,
             "lr": args.lr,
+            "anneal_lr": args.anneal_lr,
             "gamma": 0.99,
             "gae_lambda": 0.95,
             "clip_eps": 0.2,
@@ -455,7 +469,9 @@ python scripts/train_cage_vs_bline.py \\
         "rollout_steps": args.rollout_steps,
         "ppo_epochs": args.ppo_epochs,
         "minibatch_size": args.minibatch_size,
+        "num_minibatches": args.num_minibatches,
         "learning_rate": args.lr,
+        "anneal_lr": args.anneal_lr,
         "ent_coef": args.ent_coef,
         "max_grad_norm": args.max_grad_norm,
         "hidden_dim": args.hidden_dim,
@@ -519,17 +535,20 @@ def train(args):
     print(f"Num envs: {args.num_envs}, rollout_steps: {args.rollout_steps}")
     print(f"Total timesteps: {args.total_timesteps:,}")
     print(f"Network: [{args.hidden_dim}, {args.hidden_dim}] {args.activation}")
-    print(f"PPO: epochs={args.ppo_epochs}, minibatch={args.minibatch_size}, ent_coef={args.ent_coef}")
-    print(f"Optimizer: lr={args.lr}, max_grad_norm={args.max_grad_norm}")
+    print(f"PPO: epochs={args.ppo_epochs}, minibatches={args.num_minibatches}, ent_coef={args.ent_coef}")
+    print(f"Optimizer: lr={args.lr}, max_grad_norm={args.max_grad_norm}, anneal_lr={args.anneal_lr}")
     if cyborg_eval_enabled:
         print(f"CybORG eval: every {args.eval_interval:,} steps, {args.eval_episodes} episodes")
     print("=" * 60)
+
+    num_updates = args.total_timesteps // (args.num_envs * args.rollout_steps)
 
     key, key_blue = jax.random.split(key)
     train_state_blue = create_train_state(
         key_blue, obs_dim, action_dim, args.lr,
         hidden_dim=args.hidden_dim, activation=args.activation,
-        max_grad_norm=args.max_grad_norm
+        max_grad_norm=args.max_grad_norm,
+        num_updates=num_updates, anneal_lr=args.anneal_lr
     )
 
     # Initialize environments
@@ -552,7 +571,7 @@ def train(args):
 
     for update in range(num_updates):
         key, env_states, _, bline_states, transitions = collect_rollout(
-            key, env, env_states, train_state_blue, bline_states, args.rollout_steps
+            key, env, env_states, train_state_blue, bline_states, args.rollout_steps, args.reward_scale
         )
 
         total_steps += args.num_envs * args.rollout_steps
@@ -561,23 +580,24 @@ def train(args):
             transitions['reward_blue'], transitions['value_blue'], transitions['done']
         )
 
-        adv_blue = (adv_blue - adv_blue.mean()) / (adv_blue.std() + 1e-8)
+        # Don't normalize here - IPPO normalizes per-minibatch inside update_agent
 
         batch_size = args.rollout_steps * args.num_envs
 
         obs_blue = transitions['obs_blue'].reshape(batch_size, -1)
         actions_blue = transitions['action_blue'].reshape(batch_size)
-        logits_blue = transitions['logits_blue'].reshape(batch_size, -1)
+        log_probs_blue = transitions['log_prob_blue'].reshape(batch_size)
+        values_blue = transitions['value_blue'].reshape(batch_size)
         avail_blue = transitions['avail_blue'].reshape(batch_size, -1)
         adv_blue_flat = adv_blue.reshape(batch_size)
         ret_blue_flat = ret_blue.reshape(batch_size)
 
-        if args.minibatch_size <= 0 or args.minibatch_size >= batch_size:
-            minibatch_size = batch_size
-            num_minibatches = 1
-        else:
+        if args.minibatch_size > 0:
             minibatch_size = args.minibatch_size
             num_minibatches = batch_size // minibatch_size
+        else:
+            num_minibatches = args.num_minibatches
+            minibatch_size = batch_size // num_minibatches
 
         for _ in range(args.ppo_epochs):
             key, key_perm = jax.random.split(key)
@@ -592,10 +612,11 @@ def train(args):
                     train_state_blue,
                     obs_blue[mb_indices],
                     actions_blue[mb_indices],
-                    logits_blue[mb_indices],
+                    log_probs_blue[mb_indices],
+                    values_blue[mb_indices],
                     adv_blue_flat[mb_indices],
                     ret_blue_flat[mb_indices],
-                    avail_mask=avail_blue[mb_indices],
+                    avail_blue[mb_indices],
                     ent_coef=args.ent_coef,
                 )
 
@@ -718,22 +739,30 @@ def train(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Train Blue agent against B_lineAgent")
-    parser.add_argument("--num_envs", type=int, default=1,
-                        help="Number of parallel environments (SB3 default: 1)")
+    parser.add_argument("--num_envs", type=int, default=16,
+                        help="Number of parallel environments (IPPO default: 16)")
     parser.add_argument("--total_timesteps", type=int, default=3_000_000)
-    parser.add_argument("--rollout_steps", type=int, default=2048,
-                        help="Steps per rollout before PPO update (SB3 default: 2048)")
-    parser.add_argument("--ppo_epochs", type=int, default=10,
-                        help="PPO epochs per update (SB3 default: 10)")
-    parser.add_argument("--minibatch_size", type=int, default=64,
-                        help="Minibatch size for PPO updates (SB3 default: 64, 0 = full batch)")
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--ent_coef", type=float, default=0.0,
-                        help="Entropy coefficient (SB3 default: 0.0)")
+    parser.add_argument("--rollout_steps", type=int, default=128,
+                        help="Steps per rollout before PPO update (IPPO default: 128)")
+    parser.add_argument("--ppo_epochs", type=int, default=4,
+                        help="PPO epochs per update (IPPO: 4)")
+    parser.add_argument("--minibatch_size", type=int, default=0,
+                        help="Minibatch size for PPO updates (0 = use num_minibatches)")
+    parser.add_argument("--num_minibatches", type=int, default=4,
+                        help="Number of minibatches for PPO updates (IPPO: 4)")
+    parser.add_argument("--anneal_lr", action="store_true", default=True,
+                        help="Use linear LR annealing (IPPO default)")
+    parser.add_argument("--no_anneal_lr", dest="anneal_lr", action="store_false")
+    parser.add_argument("--lr", type=float, default=2.5e-4,
+                        help="Learning rate (IPPO: 2.5e-4)")
+    parser.add_argument("--ent_coef", type=float, default=0.01,
+                        help="Entropy coefficient (IPPO: 0.01)")
+    parser.add_argument("--reward_scale", type=float, default=1.0,
+                        help="Scale factor for rewards (1.0 = no scaling)")
     parser.add_argument("--max_grad_norm", type=float, default=0.5,
                         help="Max gradient norm for clipping (SB3 default: 0.5, 0 = no clipping)")
-    parser.add_argument("--hidden_dim", type=int, default=256,
-                        help="Hidden layer dimension for actor-critic network")
+    parser.add_argument("--hidden_dim", type=int, default=64,
+                        help="Hidden layer dimension for actor-critic network (IPPO: 64)")
     parser.add_argument("--activation", type=str, default="tanh",
                         choices=["relu", "tanh"],
                         help="Activation function for actor-critic network")
