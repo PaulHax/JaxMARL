@@ -148,11 +148,17 @@ class CageConst:
     red_start_hosts: chex.Array        # (num_red_agents,) int: initial compromise host indices
 
     # B_lineAgent target host indices (looked up by name for scenario compatibility)
-    # CybORG topology: User1 connects to Enterprise1, not Enterprise0
-    bline_user_host: int = 9           # User1 - initial target in User subnet
-    bline_enterprise1: int = 2         # Enterprise1 - User1's connected Enterprise host
+    # CybORG's B_lineAgent randomly selects a User host, then attacks its connected Enterprise
+    bline_user_host: int = 9           # User1 - default target (used if random disabled)
+    bline_enterprise1: int = 2         # Enterprise1 - default Enterprise target
     bline_enterprise2: int = 3         # Enterprise2
     bline_op_server0: int = 7          # Op_Server0 - final target for Impact
+
+    # User hosts that B_lineAgent can randomly select (excludes User0 which is Red's foothold)
+    bline_user_hosts: chex.Array = None  # (num_attackable_users,) int: User1, User2, User3, User4 indices
+    # User→Enterprise mapping: which Enterprise host each User connects to
+    # user_to_enterprise[i] = Enterprise index for bline_user_hosts[i]
+    user_to_enterprise: chex.Array = None  # (num_attackable_users,) int: connected Enterprise indices
 
     # Scenario parameters
     max_steps: int = 100
@@ -249,11 +255,29 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
             red_start_hosts = red_start_hosts.at[i].set(host_ids[agent.starting_host])
 
     # Look up B_lineAgent target hosts by name (works for any scenario)
-    # CybORG topology: User1 connects to Enterprise1, not Enterprise0
+    # CybORG topology: User hosts connect to specific Enterprise hosts
     bline_user_host = host_ids.get('User1', 9)
     bline_enterprise1 = host_ids.get('Enterprise1', 2)
     bline_enterprise2 = host_ids.get('Enterprise2', 3)
     bline_op_server0 = host_ids.get('Op_Server0', 7)
+
+    # Build list of attackable User hosts (excluding User0 which is Red's foothold)
+    # CybORG's B_lineAgent randomly selects from discovered hosts in User subnet
+    user_host_names = ['User1', 'User2', 'User3', 'User4']
+    bline_user_hosts = jnp.array([host_ids.get(name, 0) for name in user_host_names], dtype=jnp.int32)
+
+    # User→Enterprise mapping based on CybORG Scenario2.yaml topology:
+    # User1→Enterprise1, User2→Enterprise1, User3→Enterprise0, User4→Enterprise0
+    user_to_enterprise_map = {
+        'User1': 'Enterprise1',
+        'User2': 'Enterprise1',
+        'User3': 'Enterprise0',
+        'User4': 'Enterprise0',
+    }
+    user_to_enterprise = jnp.array([
+        host_ids.get(user_to_enterprise_map.get(name, 'Enterprise1'), 2)
+        for name in user_host_names
+    ], dtype=jnp.int32)
 
     return CageConst(
         adjacency=adjacency,
@@ -271,6 +295,8 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
         bline_enterprise1=bline_enterprise1,
         bline_enterprise2=bline_enterprise2,
         bline_op_server0=bline_op_server0,
+        bline_user_hosts=bline_user_hosts,
+        user_to_enterprise=user_to_enterprise,
         max_steps=config.max_steps,
         num_hosts=num_hosts,
         num_subnets=num_subnets,

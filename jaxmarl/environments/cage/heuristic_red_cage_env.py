@@ -87,9 +87,10 @@ class HeuristicRedCAGE(MultiAgentEnv):
 
     @partial(jax.jit, static_argnums=(0,))
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], HeuristicRedState]:
-        """Reset environment and B_lineAgent state."""
-        obs, env_state = self._env.reset(key)
-        red_policy_state = bline_reset()
+        """Reset environment and B_lineAgent state with random user target."""
+        key, env_key, bline_key = jax.random.split(key, 3)
+        obs, env_state = self._env.reset(env_key)
+        red_policy_state = bline_reset(bline_key)  # Random user target
 
         blue_obs = {agent: obs[agent] for agent in self.agents}
 
@@ -115,7 +116,7 @@ class HeuristicRedCAGE(MultiAgentEnv):
         Returns:
             Tuple of (blue_obs, new_state, blue_rewards, blue_dones, info)
         """
-        key, red_key, step_key = jax.random.split(key, 3)
+        key, red_key, step_key, reset_key = jax.random.split(key, 4)
 
         red_obs = get_red_obs(state.state, self.const)
         red_mask = get_red_action_mask(state.state, self.const)
@@ -134,11 +135,12 @@ class HeuristicRedCAGE(MultiAgentEnv):
             step_key, state.state, full_actions
         )
 
+        # Reset B_lineAgent with random user target on episode end
         new_red_policy_state = jax.lax.cond(
             dones['__all__'],
-            lambda _: bline_reset(),
-            lambda s: s,
-            new_red_policy_state
+            lambda k: bline_reset(k),
+            lambda _: new_red_policy_state,
+            reset_key
         )
 
         blue_obs = {agent: obs[agent] for agent in self.agents}

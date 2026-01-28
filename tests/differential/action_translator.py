@@ -240,7 +240,8 @@ def cyborg_red_action_to_jax(
 
         if exploit_name in EXPLOIT_CLASS_TO_JAX_IDX:
             exploit_idx = EXPLOIT_CLASS_TO_JAX_IDX[exploit_name]
-            return RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+            # Exploit encoding: host * num_exploits + exploit_type
+            return RED_EXPLOIT_START + host_idx * len(EXPLOIT_CLASS_TO_JAX_IDX) + exploit_idx
 
         return RED_SLEEP
 
@@ -259,7 +260,8 @@ def cyborg_red_action_to_jax(
             return RED_SLEEP
 
         exploit_idx = EXPLOIT_CLASS_TO_JAX_IDX[class_name]
-        return RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+        # Exploit encoding: host * num_exploits + exploit_type
+        return RED_EXPLOIT_START + host_idx * len(EXPLOIT_CLASS_TO_JAX_IDX) + exploit_idx
 
     if class_name == 'PrivilegeEscalate':
         hostname = getattr(action, 'hostname', None)
@@ -407,8 +409,10 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None
 
     if RED_EXPLOIT_START <= action_idx < RED_PRIVESC_START:
         offset = action_idx - RED_EXPLOIT_START
-        exploit_idx = offset // NUM_HOSTS
-        host_idx = offset % NUM_HOSTS
+        # Encoding: host * num_exploits + exploit_type
+        num_exploits = len(EXPLOIT_CLASSES)
+        host_idx = offset // num_exploits
+        exploit_idx = offset % num_exploits
         hostname = HOST_NAMES.get(host_idx)
 
         if hostname and exploit_idx < len(EXPLOIT_CLASSES):

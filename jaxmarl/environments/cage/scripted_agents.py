@@ -53,13 +53,24 @@ class BLineState:
     """State for B_lineAgent finite state machine."""
     fsm_state: chex.Array  # Current FSM state (0-15)
     last_action_success: chex.Array  # Track last action result
+    target_user_idx: chex.Array  # Which User host to attack (index into bline_user_hosts)
 
 
-def bline_reset() -> BLineState:
-    """Reset B_lineAgent state to initial FSM state 0."""
+def bline_reset(key: chex.PRNGKey = None) -> BLineState:
+    """Reset B_lineAgent state to initial FSM state 0.
+
+    Args:
+        key: Random key for selecting target User host. If None, defaults to User1 (idx 0).
+             CybORG's B_lineAgent randomly selects which User host to attack.
+    """
+    if key is None:
+        target_user_idx = jnp.array(0, dtype=jnp.int32)
+    else:
+        target_user_idx = jax.random.randint(key, (), 0, 4)
     return BLineState(
         fsm_state=jnp.array(0, dtype=jnp.int32),
         last_action_success=jnp.array(True, dtype=jnp.bool_),
+        target_user_idx=target_user_idx,
     )
 
 
@@ -118,8 +129,8 @@ def bline_get_action(
         current_state,
     )
 
-    # Get action for the new FSM state
-    action = _fsm_state_to_action(new_fsm_state, const)
+    # Get action for the new FSM state (pass agent_state for random user target)
+    action = _fsm_state_to_action(new_fsm_state, const, agent_state.target_user_idx)
 
     # Ensure action is valid (fallback to Sleep=0 if invalid)
     action = jax.lax.cond(
@@ -131,12 +142,13 @@ def bline_get_action(
     new_agent_state = BLineState(
         fsm_state=new_fsm_state,
         last_action_success=last_success,
+        target_user_idx=agent_state.target_user_idx,  # Preserve random target
     )
 
     return action, new_agent_state
 
 
-def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
+def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_idx: chex.Array) -> chex.Array:
     """Map FSM state to Red action index.
 
     Action encoding for Red (from actions.py):
@@ -149,13 +161,17 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
 
     16-state FSM for complete B_lineAgent attack path.
     Host and subnet indices are looked up dynamically from const for scenario compatibility.
+
+    CybORG's B_lineAgent randomly selects which User host to attack. The target_user_idx
+    selects from bline_user_hosts (User1-4), and the connected Enterprise is looked up
+    from user_to_enterprise mapping.
     """
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
-    # Get target host indices from const (looked up by name for scenario compatibility)
-    # CybORG topology: User1 connects to Enterprise1, not Enterprise0
-    user_host = const.bline_user_host
-    enterprise1 = const.bline_enterprise1
+    # Get random target User host and its connected Enterprise
+    # target_user_idx selects from bline_user_hosts (0=User1, 1=User2, 2=User3, 3=User4)
+    user_host = const.bline_user_hosts[target_user_idx]
+    enterprise1 = const.user_to_enterprise[target_user_idx]  # Connected Enterprise for this User
     enterprise2 = const.bline_enterprise2
     op_server0 = const.bline_op_server0
 
@@ -247,16 +263,22 @@ def bline_get_action_batched(
     )
 
 
-def bline_reset_batched(batch_size: int) -> BLineState:
-    """Create batched initial BLineState.
+def bline_reset_batched(batch_size: int, key: chex.PRNGKey = None) -> BLineState:
+    """Create batched initial BLineState with random User targets.
 
     Args:
         batch_size: Number of parallel environments
+        key: Random key for selecting target User hosts. If None, all target User1.
 
     Returns:
         BLineState with batched arrays
     """
+    if key is None:
+        target_user_idx = jnp.zeros(batch_size, dtype=jnp.int32)
+    else:
+        target_user_idx = jax.random.randint(key, (batch_size,), 0, 4)
     return BLineState(
         fsm_state=jnp.zeros(batch_size, dtype=jnp.int32),
         last_action_success=jnp.ones(batch_size, dtype=jnp.bool_),
+        target_user_idx=target_user_idx,
     )

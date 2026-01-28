@@ -199,7 +199,7 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
     def step_fn(carry, _):
         key, env_states, obs, bline_states = carry
 
-        key, key_blue, key_red, key_step = jax.random.split(key, 4)
+        key, key_blue, key_red, key_step, key_bline_reset = jax.random.split(key, 5)
 
         avail = jax.vmap(env.get_avail_actions)(env_states)
 
@@ -223,12 +223,13 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
             keys_step, env_states, actions
         )
 
-        # Reset B_lineAgent state when episode ends
+        # Reset B_lineAgent state when episode ends (with random user target)
         batch_size = env_states.time.shape[0]
-        reset_bline = bline_reset_batched(batch_size)
+        reset_bline = bline_reset_batched(batch_size, key_bline_reset)
         new_bline_states = BLineState(
             fsm_state=jnp.where(dones['__all__'], reset_bline.fsm_state, new_bline_states.fsm_state),
             last_action_success=jnp.where(dones['__all__'], reset_bline.last_action_success, new_bline_states.last_action_success),
+            target_user_idx=jnp.where(dones['__all__'], reset_bline.target_user_idx, new_bline_states.target_user_idx),
         )
 
         transition = {
@@ -600,12 +601,12 @@ def train(args):
     )
 
     # Initialize environments
-    key, *env_keys = jax.random.split(key, args.num_envs + 1)
+    key, key_bline, *env_keys = jax.random.split(key, args.num_envs + 2)
     env_keys = jnp.array(env_keys)
     _, env_states = jax.vmap(env.reset)(env_keys)
 
-    # Initialize B_lineAgent states
-    bline_states = bline_reset_batched(args.num_envs)
+    # Initialize B_lineAgent states with random user targets
+    bline_states = bline_reset_batched(args.num_envs, key_bline)
 
     total_steps = 0
     last_eval_step = 0

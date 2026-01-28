@@ -309,6 +309,7 @@ class TestJaxBLineAgent:
         bline_state = BLineState(
             fsm_state=jnp.array(3, dtype=jnp.int32),
             last_action_success=jnp.array(True),
+            target_user_idx=jnp.array(0, dtype=jnp.int32),
         )
 
         red_obs = jnp.array([0.0] + [0.0] * (13 * 3))
