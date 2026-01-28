@@ -16,7 +16,7 @@ from jaxmarl.environments.cage.actions import get_red_action_offsets
 
 # B_lineAgent target hosts are now looked up dynamically from CageConst
 # to support scaled scenarios where host indices differ from Scenario2.
-# The target host names (User1, Enterprise0, Enterprise2, Op_Server0) are
+# The target host names (User1, Enterprise1, Enterprise2, Op_Server0) are
 # consistent across scenarios, but their indices vary based on alphabetical
 # ordering of all hosts in the scenario.
 
@@ -28,9 +28,9 @@ BLINE_JUMP_BACK = jnp.array([
     2,   # State 2:  Exploit(User1) -> retry
     2,   # State 3:  PrivEsc(User1) -> back to exploit
     4,   # State 4:  DiscoverSubnet(Enterprise) -> retry
-    5,   # State 5:  Scan(Enterprise0) -> retry
-    6,   # State 6:  Exploit(Enterprise0) -> retry
-    6,   # State 7:  PrivEsc(Enterprise0) -> back to exploit
+    5,   # State 5:  Scan(Enterprise1) -> retry
+    6,   # State 6:  Exploit(Enterprise1) -> retry
+    6,   # State 7:  PrivEsc(Enterprise1) -> back to exploit
     8,   # State 8:  Scan(Enterprise2) -> retry
     9,   # State 9:  Exploit(Enterprise2) -> retry
     9,   # State 10: PrivEsc(Enterprise2) -> back to exploit
@@ -78,9 +78,9 @@ def bline_get_action(
     - State 2:  Exploit(User1)
     - State 3:  PrivEsc(User1)
     - State 4:  DiscoverSubnet(Enterprise)
-    - State 5:  ScanHost(Enterprise0)
-    - State 6:  Exploit(Enterprise0)
-    - State 7:  PrivEsc(Enterprise0)
+    - State 5:  ScanHost(Enterprise1)
+    - State 6:  Exploit(Enterprise1)
+    - State 7:  PrivEsc(Enterprise1)
     - State 8:  ScanHost(Enterprise2)
     - State 9:  Exploit(Enterprise2)
     - State 10: PrivEsc(Enterprise2)
@@ -153,14 +153,15 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
     # Get target host indices from const (looked up by name for scenario compatibility)
+    # CybORG topology: User1 connects to Enterprise1, not Enterprise0
     user_host = const.bline_user_host
-    enterprise0 = const.bline_enterprise0
+    enterprise1 = const.bline_enterprise1
     enterprise2 = const.bline_enterprise2
     op_server0 = const.bline_op_server0
 
     # Get subnet indices dynamically from host_subnet
     user_subnet = const.host_subnet[user_host]
-    enterprise_subnet = const.host_subnet[enterprise0]
+    enterprise_subnet = const.host_subnet[enterprise1]
     operational_subnet = const.host_subnet[op_server0]
 
     def state_0(_):  # DiscoverSubnet(User)
@@ -178,14 +179,14 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst) -> chex.Array:
     def state_4(_):  # DiscoverSubnet(Enterprise)
         return discover_start + enterprise_subnet
 
-    def state_5(_):  # ScanHost(Enterprise0)
-        return scan_start + enterprise0
+    def state_5(_):  # ScanHost(Enterprise1)
+        return scan_start + enterprise1
 
-    def state_6(_):  # Exploit(Enterprise0)
-        return exploit_start + enterprise0 * const.num_exploits + BLINE_EXPLOIT_TYPE
+    def state_6(_):  # Exploit(Enterprise1)
+        return exploit_start + enterprise1 * const.num_exploits + BLINE_EXPLOIT_TYPE
 
-    def state_7(_):  # PrivEsc(Enterprise0)
-        return privesc_start + enterprise0
+    def state_7(_):  # PrivEsc(Enterprise1)
+        return privesc_start + enterprise1
 
     def state_8(_):  # ScanHost(Enterprise2)
         return scan_start + enterprise2

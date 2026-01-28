@@ -1,0 +1,152 @@
+#!/usr/bin/env python
+"""Analyze action distribution of trained CAGE policy."""
+import pickle
+import sys
+from pathlib import Path
+import jax
+import jax.numpy as jnp
+import numpy as np
+import distrax
+from flax import linen as nn
+from flax.linen.initializers import constant, orthogonal
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from jaxmarl.environments.cage import HeuristicRedCAGE
+
+class ActorCritic(nn.Module):
+    action_dim: int
+    hidden_dim: int = 64  # Will be overridden based on checkpoint
+
+    @nn.compact
+    def __call__(self, x):
+        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        actor_mean = nn.tanh(actor_mean)
+        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor_mean)
+        actor_mean = nn.tanh(actor_mean)
+        actor_mean = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
+        critic = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        critic = nn.tanh(critic)
+        critic = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(critic)
+        critic = nn.tanh(critic)
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
+        return pi, jnp.squeeze(critic, axis=-1)
+
+def get_action_name(action_idx, num_hosts=13):
+    if action_idx == 0:
+        return "Sleep"
+    elif action_idx == 1:
+        return "Monitor"
+    base = 2
+    if action_idx < base + num_hosts:
+        return f"Analyse({action_idx - base})"
+    base += num_hosts
+    if action_idx < base + num_hosts:
+        return f"Remove({action_idx - base})"
+    base += num_hosts
+    num_decoys = 8  # 8 decoy types in CAGE, not 10
+    total_decoy = num_hosts * num_decoys
+    if action_idx < base + total_decoy:
+        rel = action_idx - base
+        host = rel // num_decoys
+        decoy = rel % num_decoys
+        return f"Decoy({host},{decoy})"
+    base += total_decoy
+    if action_idx < base + num_hosts:
+        return f"Restore({action_idx - base})"
+    return f"Unknown({action_idx})"
+
+def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
+    with open(checkpoint_path, 'rb') as f:
+        ckpt = pickle.load(f)
+
+    env = HeuristicRedCAGE(scenario="Scenario2")
+    obs_dim = env.observation_spaces["blue"].shape[0]
+    action_dim = env.action_spaces["blue"].n
+
+    # Detect hidden dim from checkpoint
+    params = ckpt['params'] if 'params' in ckpt else ckpt['runner_state'][0].params
+    hidden_dim = params['params']['Dense_0']['bias'].shape[0]
+    print(f"Detected hidden_dim={hidden_dim} from checkpoint")
+
+    network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim)
+
+    action_counts = np.zeros(action_dim)
+    total_actions = 0
+    episode_rewards = []
+
+    key = jax.random.PRNGKey(42)
+
+    for ep in range(num_episodes):
+        key, reset_key = jax.random.split(key)
+        obs, state = env.reset(reset_key)
+        done = False
+        ep_reward = 0.0
+        step = 0
+
+        while not done and step < 100:
+            obs_blue = obs["blue"]
+            pi, _ = network.apply(params, obs_blue)
+            key, action_key = jax.random.split(key)
+            action = pi.sample(seed=action_key)
+            action_int = int(action)
+            action_counts[action_int] += 1
+            total_actions += 1
+            key, step_key = jax.random.split(key)
+            actions = {"blue": action, "red": jnp.array(0)}
+            obs, state, reward, done_dict, info = env.step(step_key, state, actions)
+            done = done_dict["__all__"]
+            ep_reward += float(reward["blue"])
+            step += 1
+
+        episode_rewards.append(ep_reward)
+
+    print("=" * 60)
+    print("POLICY ACTION DISTRIBUTION ANALYSIS")
+    print("=" * 60)
+    print(f"Analyzed {num_episodes} episodes, {total_actions} total actions")
+    print(f"Mean episode reward: {np.mean(episode_rewards):.2f} (+/- {np.std(episode_rewards):.2f})")
+    print()
+
+    action_probs = action_counts / total_actions
+    sorted_indices = np.argsort(-action_counts)
+
+    print("Top 20 actions by frequency:")
+    print("-" * 50)
+    for i, idx in enumerate(sorted_indices[:20]):
+        if action_counts[idx] > 0:
+            name = get_action_name(idx)
+            print(f"  {i+1:2d}. {name:25s} {action_probs[idx]*100:6.2f}% ({int(action_counts[idx])} times)")
+
+    print()
+    print("Action type breakdown:")
+    print("-" * 50)
+    sleep_count = action_counts[0]
+    monitor_count = action_counts[1]
+    analyse_count = sum(action_counts[2:15])
+    remove_count = sum(action_counts[15:28])
+    decoy_count = sum(action_counts[28:132])  # 13 hosts * 8 decoys = 104 actions
+    restore_count = sum(action_counts[132:145])  # 13 hosts
+
+    print(f"  Sleep:    {sleep_count/total_actions*100:6.2f}% ({int(sleep_count)} actions)")
+    print(f"  Monitor:  {monitor_count/total_actions*100:6.2f}% ({int(monitor_count)} actions)")
+    print(f"  Analyse:  {analyse_count/total_actions*100:6.2f}% ({int(analyse_count)} actions)")
+    print(f"  Remove:   {remove_count/total_actions*100:6.2f}% ({int(remove_count)} actions)")
+    print(f"  Decoy:    {decoy_count/total_actions*100:6.2f}% ({int(decoy_count)} actions)")
+    print(f"  Restore:  {restore_count/total_actions*100:6.2f}% ({int(restore_count)} actions)")
+    print()
+
+    print("Entropy analysis:")
+    print("-" * 50)
+    nonzero_probs = action_probs[action_probs > 0]
+    entropy = -np.sum(nonzero_probs * np.log(nonzero_probs))
+    max_entropy = np.log(action_dim)
+    print(f"  Policy entropy:    {entropy:.3f}")
+    print(f"  Max entropy:       {max_entropy:.3f}")
+    print(f"  Normalized:        {entropy/max_entropy*100:.1f}%")
+    print(f"  Unique actions:    {np.sum(action_counts > 0)} / {action_dim}")
+
+if __name__ == "__main__":
+    ckpt_path = sys.argv[1] if len(sys.argv) > 1 else "experiments/2026-01-27_210130_blue-vs-bline_seed0/checkpoint_final.pkl"
+    analyze_policy(ckpt_path)

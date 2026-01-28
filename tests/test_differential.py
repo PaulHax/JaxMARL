@@ -25,7 +25,6 @@ from jaxmarl.environments.cage.actions import (
 )
 from jaxmarl.environments.cage.scripted_agents import (
     bline_reset, bline_get_action,
-    BLINE_USER_HOST, BLINE_ENTERPRISE0, BLINE_ENTERPRISE2, BLINE_OP_SERVER0,
 )
 
 from tests.differential.harness import (

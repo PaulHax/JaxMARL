@@ -36,7 +36,7 @@ class HeuristicRedCAGE(MultiAgentEnv):
 
     Wraps CageEnv and internally manages the Red agent using B_lineAgent,
     a deterministic finite state machine that follows the CAGE Challenge 2
-    attack path (User1 -> Enterprise0 -> Enterprise2 -> Op_Server0).
+    attack path (User1 -> Enterprise1 -> Enterprise2 -> Op_Server0).
 
     Only Blue agents are exposed to the training algorithm. Red observations,
     actions, and rewards are handled internally.

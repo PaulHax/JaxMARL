@@ -148,8 +148,9 @@ class CageConst:
     red_start_hosts: chex.Array        # (num_red_agents,) int: initial compromise host indices
 
     # B_lineAgent target host indices (looked up by name for scenario compatibility)
+    # CybORG topology: User1 connects to Enterprise1, not Enterprise0
     bline_user_host: int = 9           # User1 - initial target in User subnet
-    bline_enterprise0: int = 1         # Enterprise0
+    bline_enterprise1: int = 2         # Enterprise1 - User1's connected Enterprise host
     bline_enterprise2: int = 3         # Enterprise2
     bline_op_server0: int = 7          # Op_Server0 - final target for Impact
 
@@ -248,8 +249,9 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
             red_start_hosts = red_start_hosts.at[i].set(host_ids[agent.starting_host])
 
     # Look up B_lineAgent target hosts by name (works for any scenario)
+    # CybORG topology: User1 connects to Enterprise1, not Enterprise0
     bline_user_host = host_ids.get('User1', 9)
-    bline_enterprise0 = host_ids.get('Enterprise0', 1)
+    bline_enterprise1 = host_ids.get('Enterprise1', 2)
     bline_enterprise2 = host_ids.get('Enterprise2', 3)
     bline_op_server0 = host_ids.get('Op_Server0', 7)
 
@@ -266,7 +268,7 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
         decoy_host_indices=decoy_host_indices,
         red_start_hosts=red_start_hosts,
         bline_user_host=bline_user_host,
-        bline_enterprise0=bline_enterprise0,
+        bline_enterprise1=bline_enterprise1,
         bline_enterprise2=bline_enterprise2,
         bline_op_server0=bline_op_server0,
         max_steps=config.max_steps,

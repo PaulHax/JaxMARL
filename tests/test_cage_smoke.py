@@ -50,8 +50,9 @@ class TestBLineAgentHostIndices:
         assert env.const.num_hosts == 13
 
         # B_lineAgent targets should match Scenario2 layout
+        # CybORG topology: User1 connects to Enterprise1, not Enterprise0
         assert env.const.bline_user_host == 9      # User1
-        assert env.const.bline_enterprise0 == 1    # Enterprise0
+        assert env.const.bline_enterprise1 == 2    # Enterprise1 (User1's connected host)
         assert env.const.bline_enterprise2 == 3    # Enterprise2
         assert env.const.bline_op_server0 == 7     # Op_Server0
 
@@ -67,11 +68,11 @@ class TestBLineAgentHostIndices:
         # B_lineAgent targets should be different from Scenario2
         # These are looked up by name, not hardcoded
         assert env.const.bline_user_host != 9      # Different from Scenario2
-        assert env.const.bline_enterprise0 != 1    # Different from Scenario2
+        assert env.const.bline_enterprise1 != 1    # Different from Scenario2
 
         # Indices should be valid (within num_hosts)
         assert 0 <= env.const.bline_user_host < env.const.num_hosts
-        assert 0 <= env.const.bline_enterprise0 < env.const.num_hosts
+        assert 0 <= env.const.bline_enterprise1 < env.const.num_hosts
         assert 0 <= env.const.bline_enterprise2 < env.const.num_hosts
         assert 0 <= env.const.bline_op_server0 < env.const.num_hosts
 
@@ -84,14 +85,14 @@ class TestBLineAgentHostIndices:
 
             # Get subnet indices for each target
             user_subnet = int(env.const.host_subnet[env.const.bline_user_host])
-            ent0_subnet = int(env.const.host_subnet[env.const.bline_enterprise0])
+            ent1_subnet = int(env.const.host_subnet[env.const.bline_enterprise1])
             ent2_subnet = int(env.const.host_subnet[env.const.bline_enterprise2])
             op_subnet = int(env.const.host_subnet[env.const.bline_op_server0])
 
             # User1 and Enterprise hosts should be in different subnets than Op_Server0
             # (Op_Server0 is in Operational subnet, others are in User/Enterprise)
             assert user_subnet != op_subnet, f"{scenario}: User1 should not be in Operational subnet"
-            assert ent0_subnet != op_subnet, f"{scenario}: Enterprise0 should not be in Operational subnet"
+            assert ent1_subnet != op_subnet, f"{scenario}: Enterprise1 should not be in Operational subnet"
 
     @pytest.mark.parametrize("scenario", ['Scenario2', 'hosts_2', 'hosts_3', 'hosts_4', 'hosts_5'])
     def test_all_scenarios_have_valid_bline_targets(self, scenario):
@@ -102,7 +103,7 @@ class TestBLineAgentHostIndices:
 
         # All indices should be valid
         assert 0 <= env.const.bline_user_host < env.const.num_hosts
-        assert 0 <= env.const.bline_enterprise0 < env.const.num_hosts
+        assert 0 <= env.const.bline_enterprise1 < env.const.num_hosts
         assert 0 <= env.const.bline_enterprise2 < env.const.num_hosts
         assert 0 <= env.const.bline_op_server0 < env.const.num_hosts
 
