@@ -97,6 +97,28 @@ pip install jaxmarl
 **Development** - If you would like to run our test suite, install the additonal dependencies with:
  `pip install -e .[dev]`, after cloning the repository.
 
+**CAGE Training** - For training on the CAGE cyber defense environment with CybORG evaluation:
+
+``` bash
+uv venv .venv && source .venv/bin/activate
+uv pip install -e ".[cage]"
+```
+
+Or with pip:
+``` bash
+pip install -e ".[cage]"
+```
+
+This installs:
+- JaxMARL CAGE environment (JAX-accelerated)
+- [CybORG](https://github.com/ITM-Kitware/cage-challenge-2) for policy evaluation
+- MLflow for experiment tracking
+
+Train a Blue agent:
+``` bash
+python scripts/train_cage_vs_bline.py --total_timesteps 3000000 --ent_coef 0.05
+```
+
 <h2 name="start" id="start">Quick Start 🚀 </h2>
 
 We take inspiration from the [PettingZoo](https://github.com/Farama-Foundation/PettingZoo) and [Gymnax](https://github.com/RobertTLange/gymnax) interfaces. You can try out training an agent in our [Colab notebook](https://colab.research.google.com/github/FLAIROx/JaxMARL/blob/main/jaxmarl/tutorials/JaxMARL_Walkthrough.ipynb). Further introduction scripts can be found [here](https://github.com/FLAIROx/JaxMARL/tree/main/jaxmarl/tutorials).

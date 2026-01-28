@@ -59,6 +59,12 @@ dev = [
   "pytest",
   "pygame",
 ]
+cage = [
+  "jaxmarl[algs]",
+  "CybORG @ git+https://github.com/ITM-Kitware/cage-challenge-2.git@setup-py-package-discovery#subdirectory=CybORG",
+  "mlflow>=2.0",
+  "numpy<2",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/FLAIROx/JaxMARL"
