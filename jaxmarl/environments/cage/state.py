@@ -266,18 +266,12 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
     user_host_names = ['User1', 'User2', 'User3', 'User4']
     bline_user_hosts = jnp.array([host_ids.get(name, 0) for name in user_host_names], dtype=jnp.int32)
 
-    # User→Enterprise mapping based on CybORG Scenario2.yaml topology:
-    # User1→Enterprise1, User2→Enterprise1, User3→Enterprise0, User4→Enterprise0
-    user_to_enterprise_map = {
-        'User1': 'Enterprise1',
-        'User2': 'Enterprise1',
-        'User3': 'Enterprise0',
-        'User4': 'Enterprise0',
-    }
-    user_to_enterprise = jnp.array([
-        host_ids.get(user_to_enterprise_map.get(name, 'Enterprise1'), 2)
-        for name in user_host_names
-    ], dtype=jnp.int32)
+    # User→Enterprise mapping: CybORG's B_lineAgent picks the first Enterprise
+    # alphabetically (Enterprise0), regardless of which User host was attacked.
+    # This matches the observed CybORG behavior where it uses:
+    #   self.enterprise_host = [x for x in observation if 'Enterprise' in x][0]
+    enterprise0_idx = host_ids.get('Enterprise0', 1)
+    user_to_enterprise = jnp.array([enterprise0_idx] * len(user_host_names), dtype=jnp.int32)
 
     return CageConst(
         adjacency=adjacency,
