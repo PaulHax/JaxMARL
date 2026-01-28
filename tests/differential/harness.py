@@ -153,6 +153,7 @@ class DifferentialHarness:
         self.jax_state = None
         self.jax_key = None
         self.step_count = 0
+        self.red_known_ips = {}  # Track IPs Red has discovered
 
     def _create_cyborg_env(self):
         """Create CybORG environment."""
@@ -181,11 +182,24 @@ class DifferentialHarness:
         obs, self.jax_state = self.jax_env.reset(self.jax_key)
 
         self.step_count = 0
+        self.red_known_ips = {}
 
         cyborg_state = extract_cyborg_state(self.cyborg_env, include_obs=self.check_obs)
         jax_state = extract_jax_state(self.jax_state, self.jax_env.const, include_obs=self.check_obs)
 
         return cyborg_state, jax_state
+
+    def _update_known_ips_from_observation(self):
+        """Extract IPs that Red has discovered from CybORG observation."""
+        obs = self.cyborg_env.get_observation('Red')
+        if obs is None:
+            return
+
+        ip_map = self.cyborg_env.get_ip_map()
+        for hostname, ip in ip_map.items():
+            ip_str = str(ip)
+            if ip_str in obs:
+                self.red_known_ips[hostname] = ip
 
     def step(
         self,
@@ -202,7 +216,7 @@ class DifferentialHarness:
             StepResult with state comparison
         """
         blue_cyborg = jax_action_to_cyborg(blue_action_jax, self.cyborg_env, 'Blue')
-        red_cyborg = jax_action_to_cyborg(red_action_jax, self.cyborg_env, 'Red')
+        red_cyborg = jax_action_to_cyborg(red_action_jax, self.cyborg_env, 'Red', self.red_known_ips)
 
         # Step Blue and capture action cost (before Red's step overwrites it)
         self.cyborg_env.step('Blue', blue_cyborg)
@@ -210,6 +224,8 @@ class DifferentialHarness:
 
         # Step Red to complete the timestep
         self.cyborg_env.step('Red', red_cyborg)
+
+        self._update_known_ips_from_observation()
 
         # Get state-based rewards after both steps, then add Blue's action cost
         cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
@@ -469,6 +485,126 @@ class DifferentialHarness:
                 result.failure_reason = f"Found {result.error_diffs} error-level differences"
 
             return result
+
+    def run_meander_episode(
+        self,
+        blue_policy: Callable[[StateSnapshot, int], int],
+    ) -> TestResult:
+        """Run episode with CybORG's RedMeanderAgent for red.
+
+        Uses CybORG's Meander agent and translates actions to JAX.
+
+        Args:
+            blue_policy: Function (state, step) -> blue_action_jax
+
+        Returns:
+            TestResult with complete episode data
+        """
+        from CybORG.Agents.SimpleAgents.Meander import RedMeanderAgent
+
+        cyborg_agent = RedMeanderAgent()
+
+        cyborg_state, jax_state = self.reset()
+
+        result = TestResult(
+            seed=self.seed,
+            max_steps=self.max_steps,
+            steps_completed=0,
+        )
+
+        for step in range(self.max_steps):
+            try:
+                blue_action = blue_policy(jax_state, step)
+
+                obs = self.cyborg_env.get_observation('Red')
+                action_space = self.cyborg_env.get_action_space('Red')
+                cyborg_red_action = cyborg_agent.get_action(obs, action_space)
+
+                blue_cyborg = jax_action_to_cyborg(blue_action, self.cyborg_env, 'Blue')
+
+                self.cyborg_env.step('Blue', blue_cyborg)
+                blue_action_cost = blue_cyborg.cost if hasattr(blue_cyborg, 'cost') else 0
+
+                self.cyborg_env.step('Red', cyborg_red_action)
+
+                cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
+                cyborg_red_reward = self.cyborg_env.get_rewards()['Red']
+
+                red_action_jax = cyborg_action_to_jax(
+                    cyborg_red_action, self.cyborg_env, 'Red'
+                )
+
+                self.jax_key, subkey = jax.random.split(self.jax_key)
+                actions = {
+                    'blue': jnp.array(blue_action),
+                    'red': jnp.array(red_action_jax),
+                }
+                obs_jax, self.jax_state, rewards, dones, info = self.jax_env.step_env(
+                    subkey, self.jax_state, actions
+                )
+
+                self.step_count += 1
+
+                cyborg_state_snap = extract_cyborg_state(
+                    self.cyborg_env, include_obs=self.check_obs
+                )
+                cyborg_state_snap.reward_blue = cyborg_blue_reward
+                cyborg_state_snap.reward_red = cyborg_red_reward
+
+                jax_state_snap = extract_jax_state(
+                    self.jax_state, self.jax_env.const, include_obs=self.check_obs
+                )
+                jax_state_snap.reward_blue = float(rewards['blue'])
+                jax_state_snap.reward_red = float(rewards['red'])
+
+                diffs = compare_states(
+                    cyborg_state_snap, jax_state_snap,
+                    check_rewards=self.check_rewards,
+                    check_obs=self.check_obs,
+                )
+
+                step_result = StepResult(
+                    step=step + 1,
+                    blue_action_jax=blue_action,
+                    red_action_jax=red_action_jax,
+                    blue_action_desc=describe_jax_blue_action(blue_action),
+                    red_action_desc=describe_jax_red_action(red_action_jax),
+                    cyborg_state=cyborg_state_snap,
+                    jax_state=jax_state_snap,
+                    diffs=diffs,
+                    jax_action_success=bool(self.jax_state.last_red_action_success),
+                )
+
+                result.step_results.append(step_result)
+                result.steps_completed = step + 1
+
+                for diff in diffs:
+                    result.total_diffs += 1
+                    if diff.severity == 'error':
+                        result.error_diffs += 1
+                    else:
+                        result.warning_diffs += 1
+
+                jax_state = jax_state_snap
+
+                if self.verbose:
+                    print(f"Step {step}: {step_result.red_action_desc}")
+                    if diffs:
+                        for diff in diffs:
+                            print(f"  {diff}")
+
+            except Exception as e:
+                result.passed = False
+                result.failure_reason = f"Exception at step {step}: {e}"
+                import traceback
+                traceback.print_exc()
+                break
+
+        if result.error_diffs > 0:
+            result.passed = False
+            result.failure_reason = f"Found {result.error_diffs} error-level differences"
+
+        return result
 
 
 def sleep_policy(state: StateSnapshot, step: int) -> int:

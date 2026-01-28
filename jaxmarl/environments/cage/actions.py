@@ -539,9 +539,6 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
         red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[target_host].set(
             state.red_scanned_hosts_jax[target_host] | can_scan
         ),
-        red_discovered_hosts_jax=state.red_discovered_hosts_jax.at[target_host].set(
-            state.red_discovered_hosts_jax[target_host] | can_scan
-        ),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
             state.red_activity_this_step[target_host] | can_scan
         ),
@@ -574,8 +571,23 @@ def _apply_exploit(
 
     Detection: 95% of successful exploits generate detectable activity (matching CybORG).
     The remaining 5% succeed silently - Blue cannot detect them even with Monitor.
+
+    CybORG behavior: Exploit does NOT require prior scan - just routing access.
     """
-    host_scanned = state.red_scanned_hosts_jax[target_host]
+    num_hosts = const.num_hosts
+    num_subnets = const.num_subnets
+    target_subnet = const.host_subnet[target_host]
+
+    # Check routing: Red needs session in adjacent subnet
+    red_subnets = jnp.zeros(num_subnets, dtype=jnp.bool_)
+
+    def check_subnet(i, red_subnets):
+        has_session = state.red_sessions[i] > 0
+        subnet = const.host_subnet[i]
+        return red_subnets.at[subnet].set(red_subnets[subnet] | has_session)
+
+    red_subnets = jax.lax.fori_loop(0, num_hosts, check_subnet, red_subnets)
+    has_route = jnp.any(red_subnets & const.subnet_adjacency[:, target_subnet])
 
     services_on_host = state.host_services[target_host]
     exploit_vulnerabilities = const.service_exploits[:, exploit_type]
@@ -590,15 +602,14 @@ def _apply_exploit(
     decoy2_present = jnp.where(decoy2 >= 0, state.host_decoys[target_host, decoy2], False)
     decoy_present = decoy1_present | decoy2_present
 
-    # Deterministic: success if host scanned, has vulnerable service, and no decoy
-    success = host_scanned & has_vulnerable_service & ~decoy_present
+    # CybORG: success if has routing, has vulnerable service, and no decoy (no scan required)
+    success = has_route & has_vulnerable_service & ~decoy_present
 
-    # Exploits that give root/SYSTEM directly based on what user the service runs as:
-    # - HarakaRCE(4): SMTP/Haraka runs as root
-    # - SQLInjection(5): MySQL runs as root
-    # - EternalBlue(6): SMB runs as SYSTEM
-    # - BlueKeep(7): RDP runs as SYSTEM
-    gives_root = (exploit_type == 4) | (exploit_type == 5) | (exploit_type == 6) | (exploit_type == 7)
+    # FTPDirectoryTraversal(1), HarakaRCE(4), SQLInjection(5), EternalBlue(6), BlueKeep(7) give root
+    # Exception: BlueKeep on User2 gives NetworkService (user-level) due to RDP process user
+    gives_root = (exploit_type == 1) | (exploit_type == 4) | (exploit_type == 5) | (exploit_type == 6) | (exploit_type == 7)
+    bluekeep_on_user2 = (exploit_type == 7) & (target_host == 10)  # User2 = host index 10
+    gives_root = gives_root & ~bluekeep_on_user2
 
     target_privilege = jnp.where(gives_root, COMPROMISE_PRIVILEGED, COMPROMISE_USER)
 

@@ -32,7 +32,17 @@ EXPLOIT_CLASS_TO_JAX_IDX = {
 
 JAX_IDX_TO_EXPLOIT_CLASS = {v: k for k, v in EXPLOIT_CLASS_TO_JAX_IDX.items()}
 
-SUBNET_NAME_TO_IDX = {'User': 0, 'Enterprise': 1, 'Operational': 2}
+from jaxmarl.environments.cage.cyborg_loader import get_scenario_from_cyborg
+from jaxmarl.environments.cage.state import build_const_from_config
+
+_config = get_scenario_from_cyborg('Scenario2')
+_const = build_const_from_config(_config)
+
+SUBNET_NAME_TO_IDX = {
+    'User': int(_const.host_subnet[HOST_IDS['User0']]),
+    'Enterprise': int(_const.host_subnet[HOST_IDS['Enterprise0']]),
+    'Operational': int(_const.host_subnet[HOST_IDS['Op_Server0']]),
+}
 IDX_TO_SUBNET_NAME = {v: k for k, v in SUBNET_NAME_TO_IDX.items()}
 
 # Map IP ranges to subnet indices (based on Scenario2 layout)
@@ -50,6 +60,22 @@ DECOY_NAME_TO_IDX = {
     'DecoySmss': 3, 'DecoySSHD': 4, 'DecoySvchost': 5,
     'DecoyTomcat': 6, 'DecoyVsftpd': 7,
 }
+
+
+def _find_session_on_host(cyborg_env, hostname: str) -> int:
+    """Find Red's session ID on the given host.
+
+    Returns the session ID if Red has a session on the host, otherwise 0.
+    """
+    try:
+        state = cyborg_env.environment_controller.state
+        sessions = state.sessions.get('Red', {})
+        for session_id, session in sessions.items():
+            if session.host == hostname:
+                return session_id
+    except Exception:
+        pass
+    return 0
 
 
 def get_exploit_class_from_action(action) -> Optional[str]:
@@ -333,12 +359,15 @@ def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
     return Sleep()
 
 
-def jax_red_action_to_cyborg(action_idx: int, cyborg_env):
+def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None):
     """Convert JAX red action index to CybORG action object.
 
     Args:
         action_idx: JAX action index
         cyborg_env: CybORG environment for action space access
+        known_ips: Optional dict of hostname -> IP that Red has discovered.
+                   If provided, uses these IPs for scan/exploit actions.
+                   If None, falls back to get_ip_map().
 
     Returns:
         CybORG action object
@@ -361,13 +390,18 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env):
     if RED_DISCOVER_SUBNET_START <= action_idx < RED_SCAN_HOST_START:
         subnet_idx = action_idx - RED_DISCOVER_SUBNET_START
         subnet_name = IDX_TO_SUBNET_NAME.get(subnet_idx, 'User')
-        return DiscoverRemoteSystems(session=0, agent='Red', subnet=subnet_name)
+        state = cyborg_env.environment_controller.state
+        subnet_cidr = state.subnet_name_to_cidr.get(subnet_name)
+        return DiscoverRemoteSystems(session=0, agent='Red', subnet=subnet_cidr)
 
     if RED_SCAN_HOST_START <= action_idx < RED_EXPLOIT_START:
         host_idx = action_idx - RED_SCAN_HOST_START
         hostname = HOST_NAMES.get(host_idx)
         if hostname:
-            ip = cyborg_env.get_ip_map().get(hostname)
+            if known_ips and hostname in known_ips:
+                ip = known_ips[hostname]
+            else:
+                ip = cyborg_env.get_ip_map().get(hostname)
             return DiscoverNetworkServices(session=0, agent='Red', ip_address=ip)
         return Sleep()
 
@@ -378,7 +412,10 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env):
         hostname = HOST_NAMES.get(host_idx)
 
         if hostname and exploit_idx < len(EXPLOIT_CLASSES):
-            ip = cyborg_env.get_ip_map().get(hostname)
+            if known_ips and hostname in known_ips:
+                ip = known_ips[hostname]
+            else:
+                ip = cyborg_env.get_ip_map().get(hostname)
             exploit_class = EXPLOIT_CLASSES[exploit_idx]
             return exploit_class(ip_address=ip, agent='Red', session=0, target_session=0)
         return Sleep()
@@ -400,20 +437,21 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env):
     return Sleep()
 
 
-def jax_action_to_cyborg(action_idx: int, cyborg_env, agent: str):
+def jax_action_to_cyborg(action_idx: int, cyborg_env, agent: str, known_ips: dict = None):
     """Convert JAX action index to CybORG action object.
 
     Args:
         action_idx: JAX action index
         cyborg_env: CybORG environment for action space access
         agent: 'Blue' or 'Red'
+        known_ips: Optional dict of hostname -> IP that Red has discovered.
 
     Returns:
         CybORG action object
     """
     if agent.lower() == 'blue':
         return jax_blue_action_to_cyborg(action_idx, cyborg_env)
-    return jax_red_action_to_cyborg(action_idx, cyborg_env)
+    return jax_red_action_to_cyborg(action_idx, cyborg_env, known_ips)
 
 
 def describe_jax_blue_action(action_idx: int) -> str:
