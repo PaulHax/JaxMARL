@@ -1721,5 +1721,298 @@ class TestDecoyInteractionWithExploits:
                 f"Step {sr.step}: reward mismatch with decoy blocking exploit"
 
 
+# =============================================================================
+# SECTION 24: Impact Host Restriction Tests
+# Based on: CybORG Impact action only succeeds on Op_Server0
+# =============================================================================
+
+@requires_cyborg
+class TestImpactHostRestrictions:
+    """Test that Impact only succeeds on Op_Server0.
+
+    Impact action requires:
+    1. SYSTEM/root privilege on target host
+    2. Target must be a high-value operational server (Op_Server0)
+    """
+
+    @pytest.fixture
+    def harness(self):
+        return DifferentialHarness(seed=42, max_steps=20, verbose=False)
+
+    def test_impact_on_user_host_fails(self, harness):
+        """Impact on User host should fail even with SYSTEM privilege."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User3'),
+            red_exploit_host('User3', EXPLOIT_HARAKA),  # Haraka gives root
+            red_privesc_host('User3'),
+            red_impact_host('User3'),  # Should fail - User3 is not high-value
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        assert result.steps_completed >= 5
+        impact_step = result.step_results[4]
+
+        assert abs(impact_step.cyborg_state.reward_blue - impact_step.jax_state.reward_blue) < 0.15, \
+            "Impact on User3 reward should match"
+
+    def test_impact_on_enterprise_host_fails(self, harness):
+        """Impact on Enterprise host should fail."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User4'),
+            red_exploit_host('User4', EXPLOIT_HARAKA),
+            red_privesc_host('User4'),
+            red_scan_host('Enterprise0'),
+            red_exploit_host('Enterprise0', EXPLOIT_SQL),  # SQLInjection gives root
+            red_privesc_host('Enterprise0'),
+            red_impact_host('Enterprise0'),  # Should fail
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        assert result.steps_completed >= 8
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_red - sr.jax_state.reward_red) < 0.15, \
+                f"Step {sr.step}: reward mismatch"
+
+
+# =============================================================================
+# SECTION 25: Remove Action Privilege Tests
+# Based on: CybORG Remove only works on user-level sessions
+# =============================================================================
+
+@requires_cyborg
+class TestRemovePrivilegeRestrictions:
+    """Test Remove action privilege-level restrictions.
+
+    Remove action should only succeed on user-level sessions.
+    SYSTEM/root sessions should persist after Remove.
+    """
+
+    @pytest.fixture
+    def harness(self):
+        return DifferentialHarness(seed=42, max_steps=15, verbose=False)
+
+    def test_remove_on_root_session_ineffective(self, harness):
+        """Remove on SYSTEM session should not clear the session."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User3'),
+            red_exploit_host('User3', EXPLOIT_HARAKA),  # Gives root directly
+            red_privesc_host('User3'),
+            RED_SLEEP,  # Let Blue Remove
+            red_exploit_host('User3', EXPLOIT_HARAKA),  # Try again - should succeed if session persists
+        ]
+
+        def blue_remove_after_exploit(state: StateSnapshot, step: int) -> int:
+            if step == 4:
+                return blue_remove_host('User3')
+            return BLUE_SLEEP
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(blue_remove_after_exploit, red_policy)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_blue - sr.jax_state.reward_blue) < 0.15, \
+                f"Step {sr.step}: blue reward mismatch"
+
+
+# =============================================================================
+# SECTION 26: Restore Cost Tests
+# Based on: CybORG Restore always costs -1.0
+# =============================================================================
+
+@requires_cyborg
+class TestRestoreCostConsistency:
+    """Test that Restore action always costs -1.0."""
+
+    @pytest.fixture
+    def harness(self):
+        return DifferentialHarness(seed=42, max_steps=10, verbose=False)
+
+    def test_restore_cost_on_clean_host(self, harness):
+        """Restore on uncompromised host should cost -1.0."""
+        blue_actions = [
+            blue_restore_host('User1'),
+            blue_restore_host('Enterprise0'),
+            blue_restore_host('Op_Server0'),
+        ]
+
+        blue_policy = scripted_blue_policy_factory(blue_actions)
+
+        def red_sleep(state, step):
+            return RED_SLEEP
+
+        result = harness.run_episode(blue_policy, red_sleep)
+
+        for i, sr in enumerate(result.step_results[:3]):
+            assert abs(sr.cyborg_state.reward_blue - sr.jax_state.reward_blue) < 0.05, \
+                f"Step {i}: Restore cost mismatch"
+
+    def test_multiple_restores_accumulate_cost(self, harness):
+        """Multiple Restores on same host should each cost -1.0."""
+        blue_actions = [
+            blue_restore_host('User1'),
+            blue_restore_host('User1'),
+            blue_restore_host('User1'),
+        ]
+
+        blue_policy = scripted_blue_policy_factory(blue_actions)
+
+        def red_sleep(state, step):
+            return RED_SLEEP
+
+        result = harness.run_episode(blue_policy, red_sleep)
+
+        for sr in result.step_results[:3]:
+            assert abs(sr.cyborg_state.reward_blue - sr.jax_state.reward_blue) < 0.05, \
+                f"Step {sr.step}: accumulated Restore cost mismatch"
+
+
+# =============================================================================
+# SECTION 27: Action Prerequisite Tests
+# Based on: CybORG action ordering requirements
+# =============================================================================
+
+@requires_cyborg
+class TestActionPrerequisites:
+    """Test action prerequisite requirements match CybORG."""
+
+    @pytest.fixture
+    def harness(self):
+        return DifferentialHarness(seed=42, max_steps=10, verbose=False)
+
+    def test_privesc_without_exploit_fails(self, harness):
+        """PrivEsc without prior exploit should fail."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User1'),
+            red_privesc_host('User1'),  # Should fail - no exploit
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_red - sr.jax_state.reward_red) < 0.15, \
+                f"Step {sr.step}: reward mismatch"
+
+    def test_impact_without_privesc_fails(self, harness):
+        """Impact without PrivEsc should fail (user-level exploit)."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User1'),
+            red_exploit_host('User1', EXPLOIT_SSH),  # SSH gives user-level
+            red_impact_host('User1'),  # Should fail - no SYSTEM privilege
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_red - sr.jax_state.reward_red) < 0.1, \
+                f"Step {sr.step}: reward mismatch"
+
+    def test_exploit_without_scan_behavior(self, harness):
+        """Exploit without prior scan should behave consistently."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_exploit_host('User1', EXPLOIT_SSH),  # Skip scan
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        assert result.error_diffs == 0, f"State mismatch: {result.failure_reason}"
+
+
+# =============================================================================
+# SECTION 28: Network Topology Constraint Tests
+# Based on: CybORG subnet reachability rules
+# =============================================================================
+
+@requires_cyborg
+class TestNetworkTopologyConstraints:
+    """Test network topology constraints match CybORG.
+
+    - User hosts can reach Enterprise hosts
+    - Enterprise hosts can reach Operational hosts
+    - User hosts cannot directly reach Operational hosts
+    """
+
+    @pytest.fixture
+    def harness(self):
+        return DifferentialHarness(seed=42, max_steps=15, verbose=False)
+
+    def test_direct_op_server_scan_from_user(self, harness):
+        """Scanning Op_Server0 directly from User0 should fail."""
+        red_actions = [
+            red_discover_subnet(SUBNET_OPERATIONAL),  # Try to discover Op subnet directly
+            red_scan_host('Op_Server0'),  # Should fail - not reachable from User0
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_red - sr.jax_state.reward_red) < 0.15, \
+                f"Step {sr.step}: reward mismatch on unreachable scan"
+
+    def test_enterprise_reachable_from_user(self, harness):
+        """Enterprise0 should be reachable from User hosts."""
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User4'),
+            red_exploit_host('User4', EXPLOIT_HARAKA),
+            red_privesc_host('User4'),
+            red_scan_host('Enterprise0'),  # Should succeed - Ent0 reachable from User
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        result = harness.run_episode(sleep_policy, red_policy)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_red - sr.jax_state.reward_red) < 0.15, \
+                f"Step {sr.step}: reward mismatch"
+
+
+# =============================================================================
+# SECTION 29: Cumulative Reward Tests
+# Based on: Verify reward accumulation matches CybORG
+# =============================================================================
+
+@requires_cyborg
+class TestCumulativeRewards:
+    """Test cumulative reward accumulation matches CybORG."""
+
+    def test_full_killchain_cumulative_rewards(self):
+        """Full B_line killchain cumulative rewards should match."""
+        harness = DifferentialHarness(seed=42, max_steps=20, verbose=False)
+        result = harness.run_bline_episode(sleep_policy, use_jax_bline=False)
+
+        cyborg_cumulative = 0.0
+        jax_cumulative = 0.0
+
+        for sr in result.step_results:
+            cyborg_cumulative = sr.cyborg_state.reward_red
+            jax_cumulative = sr.jax_state.reward_red
+
+        assert abs(cyborg_cumulative - jax_cumulative) < 0.5, \
+            f"Final cumulative rewards differ: CybORG={cyborg_cumulative}, JAX={jax_cumulative}"
+
+    def test_reward_accumulation_with_blue_defense(self):
+        """Rewards should accumulate correctly with Blue defense."""
+        harness = DifferentialHarness(seed=42, max_steps=30, verbose=False)
+        result = harness.run_bline_episode(reactive_restore_policy, use_jax_bline=False)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_blue - sr.jax_state.reward_blue) < 0.2, \
+                f"Step {sr.step}: cumulative blue reward mismatch"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
