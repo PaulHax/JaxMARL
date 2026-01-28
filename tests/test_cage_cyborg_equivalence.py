@@ -243,11 +243,13 @@ class TestObservationEncodingEquivalence:
         assert list(host_obs) == [0, 0, 0, 0], f"Clean host obs: {list(host_obs)}"
 
     def test_scanned_host_encoding(self):
-        """Scanned-only host should encode as [1, 0, 0, 0] during scan step.
+        """Scanned-only host (no session) should encode as [0, 0, 0, 0].
 
-        Scans without Red session only show during the step they happen
-        (via red_activity_this_step). After that step, they're not visible
-        unless Red establishes a session.
+        CybORG's BlueTableWrapper detects anomalies based on process differences
+        from baseline. Scanning alone doesn't create persistent processes, so
+        scanned hosts without sessions are not visible in the observation.
+
+        Activity is only detected when Red has an active session (shell process).
         """
         env = CageEnv()
         _, state = env.reset(jax.random.PRNGKey(0))
@@ -260,7 +262,7 @@ class TestObservationEncodingEquivalence:
         obs = get_blue_obs(state, env.const)
 
         host_obs = obs[host_idx * 4:(host_idx + 1) * 4]
-        assert list(host_obs) == [1, 0, 0, 0], f"Scanned host obs: {list(host_obs)}"
+        assert list(host_obs) == [0, 0, 0, 0], f"Scanned host obs: {list(host_obs)}"
 
     def test_exploited_user_encoding(self):
         """User-compromised host should encode as [1, 1, 0, 1] when detected."""
@@ -280,7 +282,13 @@ class TestObservationEncodingEquivalence:
         assert list(host_obs) == [1, 1, 0, 1], f"User-compromised host obs: {list(host_obs)}"
 
     def test_exploited_privileged_encoding(self):
-        """Privileged-compromised host should encode as [1, 1, 1, 1] when detected."""
+        """Privileged-compromised host with malware should encode as [1, 1, 1, 1].
+
+        CybORG encoding:
+        - activity_0/1 = 1 (persistent session detected)
+        - compromised_0 = 1 (malware detected - indicates privileged)
+        - compromised_1 = 1 (session detected)
+        """
         env = CageEnv()
         _, state = env.reset(jax.random.PRNGKey(0))
 
@@ -289,6 +297,7 @@ class TestObservationEncodingEquivalence:
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
             red_sessions=state.red_sessions.at[host_idx].set(1),
             host_compromised=state.host_compromised.at[host_idx].set(COMPROMISE_PRIVILEGED),
+            host_has_malware=state.host_has_malware.at[host_idx].set(True),
             host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
         )
         obs = get_blue_obs(state, env.const)

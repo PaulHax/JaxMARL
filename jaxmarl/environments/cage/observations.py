@@ -37,7 +37,9 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
         Compromised: No=[0,0],   User=[0,1], Priv=[1,1], Unknown=[1,0]
 
     CybORG's BlueTableWrapper behavior:
-    - Activity is TRANSIENT: only shows during the step Red takes an action
+    - Activity is based on anomaly detection (processes different from baseline)
+    - Since Red's shell processes persist while sessions exist, activity is
+      effectively PERSISTENT - shows [1,1] as long as Red has a session
     - Compromise is PERSISTENT: stays as long as Red has a session on the host
 
     Red's initial foothold (User0) is hidden because it's part of the baseline.
@@ -51,15 +53,15 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
     initial_foothold_mask = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
     initial_foothold_mask = initial_foothold_mask.at[const.red_start_hosts].set(True)
 
-    # Activity encoding: None=[0,0], Scan=[1,0], Exploit=[1,1]
-    # CybORG activity is TRANSIENT - only shows during the step Red acts
-    red_activity = state.red_activity_this_step & ~initial_foothold_mask
     has_session = state.red_sessions > 0
 
-    # activity_0 = 1 if Red acted on this host this step
-    # activity_1 = 1 if Red has session (exploit succeeded)
-    activity_0 = red_activity.astype(jnp.float32)
-    activity_1 = (red_activity & has_session).astype(jnp.float32)
+    # Activity encoding: None=[0,0], Exploit=[1,1]
+    # CybORG shows activity based on anomaly detection - processes that differ
+    # from baseline. Red's shell processes persist while sessions exist, so
+    # activity is effectively persistent (visible as long as Red has a session)
+    visible_presence = has_session & ~initial_foothold_mask
+    activity_0 = visible_presence.astype(jnp.float32)
+    activity_1 = visible_presence.astype(jnp.float32)
 
     # Compromised encoding: No=[0,0], User=[0,1], Priv=[1,1], Unknown=[1,0]
     # CybORG's BlueTableWrapper detects:

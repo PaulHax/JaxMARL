@@ -203,8 +203,10 @@ class TestRedActions:
             red_scanned_hosts_jax=foothold_state.red_scanned_hosts_jax.at[HOST_IDS['Enterprise0']].set(True),
         )
 
-        from jaxmarl.environments.cage.state import EXPLOIT_IDS, NUM_HOSTS
-        exploit_action = RED_EXPLOIT_START + EXPLOIT_IDS['SSHBruteForce'] * NUM_HOSTS + HOST_IDS['Enterprise0']
+        from jaxmarl.environments.cage.state import EXPLOIT_IDS
+        host_idx = HOST_IDS['Enterprise0']
+        exploit_idx = EXPLOIT_IDS['SSHBruteForce']
+        exploit_action = RED_EXPLOIT_START + host_idx * const.num_exploits + exploit_idx
 
         successes = 0
         for i in range(10):

@@ -58,40 +58,43 @@ class TestBlueObservation:
         """Compromised host with Red session should be visible in blue observation.
 
         CybORG encoding: [activity_0, activity_1, compromised_0, compromised_1]
-        For PRIVILEGED compromise with session:
+        For PRIVILEGED compromise with session and malware:
         - activity_0 = 1 (Red has session)
         - activity_1 = 1 (Red has session)
-        - compromised_0 = 1 (privileged)
-        - compromised_1 = 1 (user or privileged)
+        - compromised_0 = 1 (malware detected)
+        - compromised_1 = 1 (session detected)
 
         Note: Initial foothold (User0) is hidden; test Enterprise0 instead.
+        Blue observes "privileged" via malware detection, not actual privilege level.
         """
         state = foothold_state.replace(
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_has_malware=foothold_state.host_has_malware.at[HOST_IDS['Enterprise0']].set(True),
         )
         obs = get_blue_obs(state, const)
 
         ent0_idx = HOST_IDS['Enterprise0'] * BLUE_OBS_PER_HOST
-        assert obs[ent0_idx + 2] == 1.0  # compromised_0: privileged
-        assert obs[ent0_idx + 3] == 1.0  # compromised_1: user or privileged
+        assert obs[ent0_idx + 2] == 1.0  # compromised_0: malware detected
+        assert obs[ent0_idx + 3] == 1.0  # compromised_1: session detected
 
     def test_privileged_access_visible(self, foothold_state, const):
-        """Privileged access with Red session should set both compromise flags.
+        """Privileged access with malware should set both compromise flags.
 
-        CybORG encoding: compromised_0=1 (privileged), compromised_1=1 (user or priv)
-        Visibility is based on Red having a session on the host.
+        CybORG encoding: compromised_0=1 (malware), compromised_1=1 (session)
+        Blue observes "privileged" via malware detection, not actual privilege level.
         """
         state = foothold_state.replace(
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_has_malware=foothold_state.host_has_malware.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         obs = get_blue_obs(state, const)
 
         ent0_idx = HOST_IDS['Enterprise0'] * BLUE_OBS_PER_HOST
-        assert obs[ent0_idx + 2] == 1.0  # compromised_0: privileged
-        assert obs[ent0_idx + 3] == 1.0  # compromised_1: user or privileged
+        assert obs[ent0_idx + 2] == 1.0  # compromised_0: malware detected
+        assert obs[ent0_idx + 3] == 1.0  # compromised_1: session detected
 
     def test_detection_reflects_red_activity(self, foothold_state, const):
         """Detection features should reflect red activity when detected."""
