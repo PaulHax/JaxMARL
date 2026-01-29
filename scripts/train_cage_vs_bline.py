@@ -48,78 +48,13 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jaxmarl.environments.cage import CageEnv
-
-CYBORG_AVAILABLE = False
-def setup_cyborg_eval(cyborg_path: str):
-    """Set up CybORG imports for evaluation."""
-    global CYBORG_AVAILABLE
-    cyborg_path = Path(cyborg_path)
-    if cyborg_path.exists():
-        sys.path.insert(0, str(cyborg_path))
-        try:
-            from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
-            from CybORG.Agents.SimpleAgents.BlueMonitorAgent import BlueMonitorAgent
-            from CybORG.Agents import B_lineAgent
-            from cage_experiment import CAGEExperiment
-            from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
-            CYBORG_AVAILABLE = True
-            return True
-        except ImportError as e:
-            print(f"Warning: Could not import CybORG components: {e}")
-            return False
-    return False
-
-
-def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
-                       steps: int = 100, seed: int = 42):
-    """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
-
-    Returns dict with: confidentiality, integrity, availability, resilience, reward
-    """
-    if not CYBORG_AVAILABLE:
-        return None
-
-    cyborg_dir = Path(cyborg_path)
-    sys.path.insert(0, str(cyborg_dir))
-
-    from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
-    from CybORG.Agents import B_lineAgent
-    from cage_experiment import CAGEExperiment
-    from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
-
-    agent = JaxPolicyAgent(checkpoint_path)
-    metric = ResilienceMetric()
-
-    cage = CAGEExperiment(
-        agent,
-        red_agent=B_lineAgent,
-        scenario="Scenario2",
-        seed=seed,
-        metric=metric,
-        experiment_export_dir="/tmp/jax_eval",
-        use_wrapper=True
-    )
-    agent.set_env = lambda env: None
-
-    results = cage.run_experiment(
-        episodes=episodes,
-        steps=steps,
-        plot_export_path="eval.png",
-        verbose=False
-    )
-
-    return {
-        "confidentiality": results[0],
-        "integrity": results[1],
-        "availability": results[2],
-        "resilience": results[3],
-        "reward": results[4],
-        "confidentiality_std": results[5],
-        "integrity_std": results[6],
-        "availability_std": results[7],
-        "resilience_std": results[8],
-        "reward_std": results[9],
-    }
+from utils.cyborg_eval import (
+    setup_cyborg_eval,
+    evaluate_in_cyborg,
+    log_cyborg_eval_results,
+    format_cyborg_eval_summary,
+)
+from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
 from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, compute_blue_action_space_size
 from jaxmarl.environments.cage.observations import BLUE_OBS_DIM, compute_blue_obs_dim
 from jaxmarl.environments.cage.scripted_agents import (
@@ -747,29 +682,19 @@ def train(args):
 
                 if cia_results:
                     mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
-                    mlflow.log_metrics({
-                        "eval/confidentiality": cia_results["confidentiality"],
-                        "eval/integrity": cia_results["integrity"],
-                        "eval/availability": cia_results["availability"],
-                        "eval/resilience": cia_results["resilience"],
-                        "eval/cyborg_reward": cia_results["reward"],
-                    }, step=total_steps)
+                    log_cyborg_eval_results(cia_results, mlflow, total_steps, prefix="eval", verbose=False)
 
-                    metrics_logger.log({
-                        "eval_step": total_steps,
-                        "eval/confidentiality": round(cia_results["confidentiality"], 3),
-                        "eval/integrity": round(cia_results["integrity"], 3),
-                        "eval/availability": round(cia_results["availability"], 3),
-                        "eval/resilience": round(cia_results["resilience"], 3),
-                        "eval/cyborg_reward": round(cia_results["reward"], 2),
-                    })
+                    log_dict = {"eval_step": total_steps}
+                    for key in ["confidentiality", "integrity", "availability", "resilience"]:
+                        log_dict[f"eval/{key}"] = round(cia_results[key], 3)
+                    log_dict["eval/cyborg_reward"] = round(cia_results["reward"], 2)
+                    for name in BLUE_ACTION_NAMES:
+                        pct_key = f"pct_{name.lower()}"
+                        if pct_key in cia_results:
+                            log_dict[f"eval/{pct_key}"] = round(cia_results[pct_key], 1)
+                    metrics_logger.log(log_dict)
 
-                    print(f"  CybORG eval ({eval_time:.1f}s): "
-                          f"C={cia_results['confidentiality']:.2f} "
-                          f"I={cia_results['integrity']:.2f} "
-                          f"A={cia_results['availability']:.2f} "
-                          f"R={cia_results['resilience']:.2f} "
-                          f"Reward={cia_results['reward']:.1f}\n")
+                    print(f"  CybORG eval ({eval_time:.1f}s): {format_cyborg_eval_summary(cia_results)}\n")
 
     elapsed = time.perf_counter() - start_time
 
@@ -802,20 +727,8 @@ def train(args):
             steps=100, seed=args.seed
         )
         if cia_results:
-            mlflow.log_metrics({
-                "final/confidentiality": cia_results["confidentiality"],
-                "final/integrity": cia_results["integrity"],
-                "final/availability": cia_results["availability"],
-                "final/resilience": cia_results["resilience"],
-                "final/cyborg_reward": cia_results["reward"],
-            }, step=total_steps)
-
             print("\nFinal CybORG Results:")
-            print(f"  Confidentiality: {cia_results['confidentiality']:.3f} ± {cia_results['confidentiality_std']:.3f}")
-            print(f"  Integrity:       {cia_results['integrity']:.3f} ± {cia_results['integrity_std']:.3f}")
-            print(f"  Availability:    {cia_results['availability']:.3f} ± {cia_results['availability_std']:.3f}")
-            print(f"  Resilience:      {cia_results['resilience']:.3f} ± {cia_results['resilience_std']:.3f}")
-            print(f"  CybORG Reward:   {cia_results['reward']:.2f} ± {cia_results['reward_std']:.2f}")
+            log_cyborg_eval_results(cia_results, mlflow, total_steps)
 
     return train_state_blue
 

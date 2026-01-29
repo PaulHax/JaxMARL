@@ -7,7 +7,7 @@
 "GAMMA": 0.99
 "GAE_LAMBDA": 0.95
 "CLIP_EPS": 0.2
-"ENT_COEF": 0.01
+"ENT_COEF": 0.05
 "VF_COEF": 0.5
 "MAX_GRAD_NORM": 0.5
 "ACTIVATION": "tanh"
@@ -23,3 +23,8 @@
 # Logging
 "MLFLOW_EXPERIMENT": "cage-training"
 "EXPERIMENT_DIR": "experiments"
+
+# CybORG Evaluation
+"EVAL_INTERVAL": 0
+"EVAL_EPISODES": 10
+"CYBORG_PATH": "/home/paulhax/src/cyber/cage-challenge-2/CybORG"

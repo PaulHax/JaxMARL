@@ -21,10 +21,19 @@ import hydra
 from omegaconf import OmegaConf
 import mlflow
 import os
+import sys
 import json
 import pickle
 from datetime import datetime
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+from utils.cyborg_eval import (
+    setup_cyborg_eval,
+    evaluate_in_cyborg,
+    log_cyborg_eval_results,
+)
+from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
 
 import jaxmarl
 from jaxmarl.wrappers.baselines import LogWrapper
@@ -347,6 +356,7 @@ def make_train(config):
 
 @hydra.main(version_base=None, config_path="config", config_name="ippo_ff_cage")
 def main(config):
+    import time
     config = OmegaConf.to_container(config)
 
     exp_dir = Path(config.get("EXPERIMENT_DIR", "experiments"))
@@ -354,6 +364,18 @@ def main(config):
     exp_name = f"{timestamp}_ippo_ff_cage_seed{config['SEED']}"
     save_dir = exp_dir / exp_name
     save_dir.mkdir(parents=True, exist_ok=True)
+
+    eval_interval = config.get("EVAL_INTERVAL", 0)
+    eval_episodes = config.get("EVAL_EPISODES", 10)
+    cyborg_path = config.get("CYBORG_PATH", "/home/paulhax/src/cyber/cage-challenge-2/CybORG")
+
+    cyborg_eval_enabled = False
+    if eval_interval > 0:
+        if setup_cyborg_eval(cyborg_path):
+            cyborg_eval_enabled = True
+            print(f"CybORG evaluation enabled (final only, interval={eval_interval})")
+        else:
+            print("Warning: CybORG evaluation requested but CybORG not available")
 
     mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
     mlflow.set_experiment(config.get("MLFLOW_EXPERIMENT", "cage-training"))
@@ -380,6 +402,9 @@ def main(config):
         "env_name": config["ENV_NAME"],
         "scenario": config["ENV_KWARGS"].get("scenario", "Scenario2"),
         "max_steps": config["ENV_KWARGS"].get("max_steps", 100),
+        "eval_interval": eval_interval,
+        "eval_episodes": eval_episodes,
+        "cyborg_path": cyborg_path,
     })
 
     print("=" * 60)
@@ -392,11 +417,13 @@ def main(config):
     print(f"Num steps: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 64)}")
     print(f"Activation: {config['ACTIVATION']}")
+    print(f"Ent coef: {config['ENT_COEF']}")
     print(f"Seeds: {config.get('NUM_SEEDS', 1)}")
     print(f"Experiment dir: {save_dir}")
+    if cyborg_eval_enabled:
+        print(f"CybORG eval: {eval_episodes} episodes")
     print("=" * 60)
 
-    import time
     start_time = time.perf_counter()
 
     rng = jax.random.PRNGKey(config["SEED"])
@@ -458,14 +485,28 @@ def main(config):
         "final/throughput_sps": sps,
     }, step=total_steps)
 
-    mlflow.end_run()
-
     print(f"\nTraining complete!")
     print(f"Wall time: {elapsed:.1f}s")
     print(f"Throughput: {sps:,.0f} steps/sec")
     print(f"Final returns: {final_return:.2f}")
     print(f"Saved to: {save_dir}")
-    print(f"View in MLflow: mlflow ui")
+
+    if cyborg_eval_enabled:
+        print("\nRunning final CybORG evaluation...")
+        eval_start = time.perf_counter()
+        cia_results = evaluate_in_cyborg(
+            str(checkpoint_path), cyborg_path,
+            episodes=eval_episodes * 2,
+            steps=100, seed=config["SEED"]
+        )
+        eval_time = time.perf_counter() - eval_start
+
+        if cia_results:
+            print(f"\nFinal CybORG Results ({eval_time:.1f}s):")
+            log_cyborg_eval_results(cia_results, mlflow, total_steps)
+
+    mlflow.end_run()
+    print(f"\nView in MLflow: mlflow ui")
 
 
 if __name__ == "__main__":

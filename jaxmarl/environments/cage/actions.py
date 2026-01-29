@@ -58,6 +58,10 @@ NUM_SUBNETS = 3
 NUM_SERVICES = 10
 NUM_EXPLOITS = 8
 
+# Blue action type names (indexed by action_type from decode_blue_action)
+# Action types: 0=Sleep, 1=Monitor, 2=Analyse, 3=Remove, 4=Restore, 5=Decoy
+BLUE_ACTION_NAMES = ["Sleep", "Monitor", "Analyse", "Remove", "Restore", "Decoy"]
+
 # Blue action encoding for default scenario (matching CybORG exactly)
 # CybORG order: Sleep, Monitor, Analyse(13), Remove(13), Decoy(8×13), Restore(13)
 BLUE_SLEEP = 0
