@@ -12,7 +12,7 @@ from jaxmarl.environments.cage.actions import (
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
     BLUE_SLEEP, BLUE_MONITOR, BLUE_REMOVE_START, BLUE_RESTORE_START,
     BLUE_ANALYSE_START, BLUE_DECOY_START, NUM_DECOY_TYPES,
-    NUM_HOSTS,
+    NUM_HOSTS, NUM_EXPLOITS,
 )
 from jaxmarl.environments.cage.cyborg_loader import get_scenario_from_cyborg
 
@@ -54,7 +54,7 @@ def red_scan_host(hostname: str) -> int:
 
 def red_exploit_host(hostname: str, exploit_type: int) -> int:
     """Get action index for Exploit on host with specific exploit."""
-    return RED_EXPLOIT_START + exploit_type * NUM_HOSTS + HOST_IDS[hostname]
+    return RED_EXPLOIT_START + HOST_IDS[hostname] * NUM_EXPLOITS + exploit_type
 
 
 def red_privesc_host(hostname: str) -> int:

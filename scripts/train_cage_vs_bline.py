@@ -372,37 +372,42 @@ def save_policy(params, filepath):
     print(f"Saved policy to {filepath}")
 
 
-def extract_episode_stats(rewards, dones):
-    """Extract completed episode returns and lengths from a rollout.
+class EpisodeTracker:
+    """Track episode returns and lengths across rollout boundaries."""
 
-    Args:
-        rewards: Array of shape (num_steps, num_envs)
-        dones: Array of shape (num_steps, num_envs), True at episode boundaries
+    def __init__(self, num_envs: int):
+        self.num_envs = num_envs
+        self.current_returns = np.zeros(num_envs)
+        self.current_lengths = np.zeros(num_envs, dtype=np.int32)
 
-    Returns:
-        Tuple of (episode_returns, episode_lengths) for completed episodes
-    """
-    # Transfer to CPU once (avoid per-element GPU->CPU transfers)
-    rewards_np = np.asarray(rewards)
-    dones_np = np.asarray(dones)
+    def update(self, rewards, dones):
+        """Process a rollout and return completed episode stats.
 
-    num_steps, num_envs = rewards_np.shape
-    episode_returns = []
-    episode_lengths = []
-    current_returns = np.zeros(num_envs)
-    current_lengths = np.zeros(num_envs, dtype=np.int32)
+        Args:
+            rewards: Array of shape (num_steps, num_envs)
+            dones: Array of shape (num_steps, num_envs), True at episode boundaries
 
-    for t in range(num_steps):
-        current_returns += rewards_np[t]
-        current_lengths += 1
-        done_mask = dones_np[t]
-        if np.any(done_mask):
-            episode_returns.extend(current_returns[done_mask].tolist())
-            episode_lengths.extend(current_lengths[done_mask].tolist())
-            current_returns[done_mask] = 0.0
-            current_lengths[done_mask] = 0
+        Returns:
+            Tuple of (episode_returns, episode_lengths) for completed episodes
+        """
+        rewards_np = np.asarray(rewards)
+        dones_np = np.asarray(dones)
 
-    return episode_returns, episode_lengths
+        num_steps = rewards_np.shape[0]
+        episode_returns = []
+        episode_lengths = []
+
+        for t in range(num_steps):
+            self.current_returns += rewards_np[t]
+            self.current_lengths += 1
+            done_mask = dones_np[t]
+            if np.any(done_mask):
+                episode_returns.extend(self.current_returns[done_mask].tolist())
+                episode_lengths.extend(self.current_lengths[done_mask].tolist())
+                self.current_returns[done_mask] = 0.0
+                self.current_lengths[done_mask] = 0
+
+        return episode_returns, episode_lengths
 
 
 def get_git_commit():
@@ -612,6 +617,7 @@ def train(args):
     last_eval_step = 0
     episode_returns_blue = []
     episode_lengths_blue = []
+    episode_tracker = EpisodeTracker(args.num_envs)
 
     print("\nTraining Blue against B_lineAgent...")
     start_time = time.perf_counter()
@@ -684,7 +690,7 @@ def train(args):
                         ent_coef=args.ent_coef,
                     )
 
-        completed_returns, completed_lengths = extract_episode_stats(
+        completed_returns, completed_lengths = episode_tracker.update(
             transitions['reward_blue'], transitions['done']
         )
         episode_returns_blue.extend(completed_returns)

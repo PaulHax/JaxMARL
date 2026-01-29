@@ -42,7 +42,31 @@ BLINE_JUMP_BACK = jnp.array([
 ])
 
 # Default exploit type for B_lineAgent (SSH brute force = 0)
+# NOTE: This is only used as a fallback. The actual exploit selection is now
+# computed dynamically based on each host's available services to match
+# CybORG's ExploitRemoteService behavior.
 BLINE_EXPLOIT_TYPE = 0
+
+
+def _get_host_first_exploit(host_idx: chex.Array, const: CageConst) -> chex.Array:
+    """Get the first available exploit for a host based on its initial services.
+
+    CybORG's ExploitRemoteService selects an exploit that matches the target's
+    services. This function computes the first valid exploit for a given host.
+    """
+    services = const.initial_services[host_idx]  # (num_services,)
+
+    # For each exploit, check if the host has a service that's vulnerable to it
+    def check_exploit(exploit_idx):
+        # Check all services to see if any is vulnerable to this exploit
+        has_service = jnp.any(services & const.service_exploits[:, exploit_idx])
+        return has_service
+
+    # Check exploits in order and find first valid one
+    exploit_available = jax.vmap(check_exploit)(jnp.arange(const.num_exploits))
+    # Return first available exploit (default to 0 if none found)
+    first_exploit = jnp.argmax(exploit_available)
+    return first_exploit
 
 # Max FSM state
 BLINE_MAX_STATE = 15
@@ -187,7 +211,8 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + user_host
 
     def state_2(_):  # Exploit(User1)
-        return exploit_start + user_host * const.num_exploits + BLINE_EXPLOIT_TYPE
+        exploit_type = _get_host_first_exploit(user_host, const)
+        return exploit_start + user_host * const.num_exploits + exploit_type
 
     def state_3(_):  # PrivEsc(User1)
         return privesc_start + user_host
@@ -199,7 +224,8 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + enterprise1
 
     def state_6(_):  # Exploit(Enterprise1)
-        return exploit_start + enterprise1 * const.num_exploits + BLINE_EXPLOIT_TYPE
+        exploit_type = _get_host_first_exploit(enterprise1, const)
+        return exploit_start + enterprise1 * const.num_exploits + exploit_type
 
     def state_7(_):  # PrivEsc(Enterprise1)
         return privesc_start + enterprise1
@@ -208,7 +234,8 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + enterprise2
 
     def state_9(_):  # Exploit(Enterprise2)
-        return exploit_start + enterprise2 * const.num_exploits + BLINE_EXPLOIT_TYPE
+        exploit_type = _get_host_first_exploit(enterprise2, const)
+        return exploit_start + enterprise2 * const.num_exploits + exploit_type
 
     def state_10(_):  # PrivEsc(Enterprise2)
         return privesc_start + enterprise2
@@ -220,7 +247,8 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + op_server0
 
     def state_13(_):  # Exploit(Op_Server0)
-        return exploit_start + op_server0 * const.num_exploits + BLINE_EXPLOIT_TYPE
+        exploit_type = _get_host_first_exploit(op_server0, const)
+        return exploit_start + op_server0 * const.num_exploits + exploit_type
 
     def state_14(_):  # PrivEsc(Op_Server0)
         return privesc_start + op_server0
