@@ -189,9 +189,18 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
 
 
 @jax.jit
-def compute_gae(rewards, values, dones, gamma=0.99, gae_lambda=0.95):
-    """Compute Generalized Advantage Estimation."""
-    next_values = jnp.concatenate([values[1:], jnp.zeros_like(values[:1])])
+def compute_gae(rewards, values, dones, last_val, gamma=0.99, gae_lambda=0.95):
+    """Compute Generalized Advantage Estimation with proper bootstrapping.
+
+    Args:
+        rewards: (num_steps, num_envs) rewards
+        values: (num_steps, num_envs) value estimates
+        dones: (num_steps, num_envs) episode done flags
+        last_val: (num_envs,) value estimate for final observation (bootstrap)
+        gamma: discount factor
+        gae_lambda: GAE lambda parameter
+    """
+    next_values = jnp.concatenate([values[1:], last_val[None, :]])
     deltas = rewards + gamma * next_values * (1 - dones) - values
 
     def scan_fn(lastgae, inputs):
@@ -560,14 +569,20 @@ def train(args):
     num_updates = args.total_timesteps // (args.num_envs * args.rollout_steps)
 
     for update in range(num_updates):
-        key, env_states, _, bline_states, transitions = collect_rollout(
+        key, env_states, final_obs, bline_states, transitions = collect_rollout(
             key, env, env_states, train_state_blue, bline_states, args.rollout_steps, args.reward_scale
         )
 
         total_steps += args.num_envs * args.rollout_steps
 
+        # Compute bootstrap value for GAE (value of final observation)
+        final_avail = jax.vmap(env.get_avail_actions)(env_states)
+        _, last_val = train_state_blue.apply_fn(
+            train_state_blue.params, final_obs['blue'], final_avail['blue']
+        )
+
         adv_blue, ret_blue = compute_gae(
-            transitions['reward_blue'], transitions['value_blue'], transitions['done']
+            transitions['reward_blue'], transitions['value_blue'], transitions['done'], last_val
         )
 
         # Don't normalize here - IPPO normalizes per-minibatch inside update_agent

@@ -479,8 +479,10 @@ def main(config):
     mlflow.log_artifact(str(save_dir / "config.json"))
 
     final_return = float(metrics["returned_episode_returns"][-1].mean())
+    final_entropy = float(metrics["entropy"][-1].mean())
     mlflow.log_metrics({
         "final/episode_return": final_return,
+        "final/entropy": final_entropy,
         "final/wall_time_sec": elapsed,
         "final/throughput_sps": sps,
     }, step=total_steps)
@@ -489,6 +491,7 @@ def main(config):
     print(f"Wall time: {elapsed:.1f}s")
     print(f"Throughput: {sps:,.0f} steps/sec")
     print(f"Final returns: {final_return:.2f}")
+    print(f"Final entropy: {final_entropy:.4f}")
     print(f"Saved to: {save_dir}")
 
     if cyborg_eval_enabled:
