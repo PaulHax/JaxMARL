@@ -375,6 +375,30 @@ def compare_states(
                 severity='error',  # Decoys affect exploit success
             ))
 
+        # Compare activity detected (affects Remove action validity)
+        cyborg_activity = cyborg_state.host_activity_detected.get(hostname, False)
+        jax_activity = jax_state.host_activity_detected.get(hostname, False)
+        if cyborg_activity != jax_activity:
+            diffs.append(StateDiff(
+                field='host_activity_detected',
+                host=hostname,
+                cyborg_value=cyborg_activity,
+                jax_value=jax_activity,
+                severity='warning',  # Detection tracking differs between implementations
+            ))
+
+        # Compare OT service stopped (affects Impact rewards)
+        cyborg_ot = cyborg_state.ot_service_stopped.get(hostname, False)
+        jax_ot = jax_state.ot_service_stopped.get(hostname, False)
+        if cyborg_ot != jax_ot:
+            diffs.append(StateDiff(
+                field='ot_service_stopped',
+                host=hostname,
+                cyborg_value=cyborg_ot,
+                jax_value=jax_ot,
+                severity='error',  # Affects game outcome
+            ))
+
     if check_rewards:
         if abs(cyborg_state.reward_blue - jax_state.reward_blue) > reward_tolerance:
             diffs.append(StateDiff(

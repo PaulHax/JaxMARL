@@ -26,7 +26,7 @@ from jaxmarl.environments.cage.actions import (
     BLUE_REMOVE_START, BLUE_RESTORE_START, BLUE_DECOY_START,
     RED_SLEEP, RED_DISCOVER_SUBNET_START, RED_SCAN_HOST_START,
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
-    NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_DECOY_TYPES,
+    NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_DECOY_TYPES, NUM_EXPLOITS,
     apply_blue_action, apply_red_action,
 )
 
@@ -231,7 +231,7 @@ class TestRedExploitParity:
         cyborg_success = cyborg_obs.get('success', False)
 
         # Execute exploit in JAX
-        exploit_action = RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+        exploit_action = RED_EXPLOIT_START + host_idx * NUM_EXPLOITS + exploit_idx
         new_jax_state = apply_red_action(jax_state, exploit_action, jax_env.const, key)
         jax_success = bool(new_jax_state.last_red_action_success)
 
@@ -389,7 +389,7 @@ class TestRewardParity:
         cyborg_reward = cyborg.get_rewards()['Red']
 
         exploit_idx = EXPLOIT_IDS['SSHBruteForce']
-        exploit_action = RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + target_idx
+        exploit_action = RED_EXPLOIT_START + target_idx * NUM_EXPLOITS + exploit_idx
         key, subkey = jax.random.split(key)
 
         actions = {'blue': jnp.array(BLUE_SLEEP), 'red': jnp.array(exploit_action)}

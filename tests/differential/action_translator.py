@@ -513,8 +513,9 @@ def describe_jax_red_action(action_idx: int) -> str:
 
     if RED_EXPLOIT_START <= action_idx < RED_PRIVESC_START:
         offset = action_idx - RED_EXPLOIT_START
-        exploit_idx = offset // NUM_HOSTS
-        host_idx = offset % NUM_HOSTS
+        num_exploits = len(EXPLOIT_CLASS_TO_JAX_IDX)
+        host_idx = offset // num_exploits
+        exploit_idx = offset % num_exploits
         hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
         exploit_name = JAX_IDX_TO_EXPLOIT_CLASS.get(exploit_idx, f"exploit_{exploit_idx}")
         return f"{exploit_name}({hostname})"
