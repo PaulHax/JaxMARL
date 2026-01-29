@@ -31,6 +31,7 @@ from .environments import (
     JaxNav,
     CageEnv,
     HeuristicRedCAGE,
+    HeuristicMeanderCAGE,
     SUBMODULE_ENVIRONMENTS
 )
 
@@ -137,6 +138,8 @@ def make(env_id: str, **env_kwargs):
         env = CageEnv(**env_kwargs)
     elif env_id == "HeuristicRedCAGE":
         env = HeuristicRedCAGE(**env_kwargs)
+    elif env_id == "HeuristicMeanderCAGE":
+        env = HeuristicMeanderCAGE(**env_kwargs)
 
     if SUBMODULE_ENVIRONMENTS:
         # 10. JaxRobotarium Environments
@@ -200,4 +203,5 @@ registered_envs = [
     "JaxRobotarium_predator_prey",
     "CAGE",
     "HeuristicRedCAGE",
+    "HeuristicMeanderCAGE",
 ]

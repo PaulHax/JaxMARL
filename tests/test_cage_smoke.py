@@ -342,5 +342,211 @@ class TestObservationPersistence:
         )
 
 
+class TestRedMeanderAgent:
+    """Test RedMeanderAgent exploratory behavior."""
+
+    def test_meander_reset_creates_valid_state(self):
+        """Verify meander_reset creates valid MeanderState."""
+        from jaxmarl.environments.cage import CageEnv
+        from jaxmarl.environments.cage.scripted_agents import meander_reset
+
+        env = CageEnv(scenario='Scenario2')
+        state = meander_reset(env.const)
+
+        assert state.scanned_subnets.shape == (env.const.num_subnets,)
+        assert state.scanned_ips.shape == (env.const.num_hosts,)
+        assert state.exploited_ips.shape == (env.const.num_hosts,)
+        assert state.escalated_hosts.shape == (env.const.num_hosts,)
+        assert jnp.all(~state.scanned_subnets)
+        assert jnp.all(~state.scanned_ips)
+        assert state.last_host_idx == -1
+        assert state.last_ip_idx == -1
+
+    def test_meander_produces_valid_actions(self):
+        """Verify RedMeanderAgent produces valid actions."""
+        from jaxmarl.environments.cage import CageEnv
+        from jaxmarl.environments.cage.scripted_agents import meander_reset, meander_get_action
+
+        env = CageEnv(scenario='Scenario2')
+        key = jax.random.PRNGKey(42)
+
+        obs, state = env.reset(key)
+        agent_state = meander_reset(env.const)
+
+        avail = env.get_avail_actions(state)
+
+        key, subkey = jax.random.split(key)
+        action, new_agent_state = meander_get_action(
+            agent_state, obs['red'], avail['red'], env.const, subkey
+        )
+
+        assert 0 <= int(action) < env.red_action_size
+
+    def test_meander_explores_network(self):
+        """Verify RedMeanderAgent explores the network over multiple steps."""
+        from jaxmarl.environments.cage import CageEnv
+        from jaxmarl.environments.cage.scripted_agents import meander_reset, meander_get_action
+
+        env = CageEnv(scenario='Scenario2', max_steps=100)
+        key = jax.random.PRNGKey(42)
+
+        obs, state = env.reset(key)
+        agent_state = meander_reset(env.const)
+
+        actions_taken = []
+        for step in range(20):
+            avail = env.get_avail_actions(state)
+            key, subkey = jax.random.split(key)
+            action, agent_state = meander_get_action(
+                agent_state, obs['red'], avail['red'], env.const, subkey
+            )
+            actions_taken.append(int(action))
+
+            key, subkey = jax.random.split(key)
+            actions = {'blue': jnp.array(0), 'red': action}
+            obs, state, rewards, dones, info = env.step(subkey, state, actions)
+
+        unique_actions = len(set(actions_taken))
+        assert unique_actions > 3, f"Meander should take diverse actions, got {unique_actions} unique"
+
+    def test_meander_tracks_scanned_subnets(self):
+        """Verify Meander tracks which subnets have been scanned."""
+        from jaxmarl.environments.cage import CageEnv
+        from jaxmarl.environments.cage.scripted_agents import meander_reset, meander_get_action
+
+        env = CageEnv(scenario='Scenario2')
+        key = jax.random.PRNGKey(42)
+
+        obs, state = env.reset(key)
+        agent_state = meander_reset(env.const)
+
+        for step in range(10):
+            avail = env.get_avail_actions(state)
+            key, subkey = jax.random.split(key)
+            action, agent_state = meander_get_action(
+                agent_state, obs['red'], avail['red'], env.const, subkey
+            )
+
+            key, subkey = jax.random.split(key)
+            actions = {'blue': jnp.array(0), 'red': action}
+            obs, state, rewards, dones, info = env.step(subkey, state, actions)
+
+        num_scanned_subnets = int(jnp.sum(agent_state.scanned_subnets))
+        assert num_scanned_subnets > 0, "Meander should have scanned at least one subnet"
+
+    def test_meander_batched_works(self):
+        """Verify batched Meander functions work."""
+        from jaxmarl.environments.cage import CageEnv
+        from jaxmarl.environments.cage.scripted_agents import (
+            meander_reset_batched, meander_get_action_batched
+        )
+
+        env = CageEnv(scenario='Scenario2')
+        batch_size = 4
+        key = jax.random.PRNGKey(42)
+
+        keys = jax.random.split(key, batch_size)
+        _, states = jax.vmap(env.reset)(keys)
+
+        agent_states = meander_reset_batched(batch_size, env.const, key)
+
+        assert agent_states.scanned_subnets.shape == (batch_size, env.const.num_subnets)
+        assert agent_states.scanned_ips.shape == (batch_size, env.const.num_hosts)
+
+        obs = jax.vmap(env.get_obs)(states)
+        avail = jax.vmap(env.get_avail_actions)(states)
+
+        keys = jax.random.split(key, batch_size)
+        actions, new_states = meander_get_action_batched(
+            agent_states, obs['red'], avail['red'], env.const, keys
+        )
+
+        assert actions.shape == (batch_size,)
+        assert new_states.scanned_subnets.shape == (batch_size, env.const.num_subnets)
+
+    @pytest.mark.parametrize("scenario", ['Scenario2', 'hosts_2', 'hosts_3', 'hosts_4', 'hosts_5'])
+    def test_meander_works_all_scenarios(self, scenario):
+        """Verify Meander works for all scenarios."""
+        from jaxmarl.environments.cage import CageEnv
+        from jaxmarl.environments.cage.scripted_agents import meander_reset, meander_get_action
+
+        env = CageEnv(scenario=scenario)
+        key = jax.random.PRNGKey(42)
+
+        obs, state = env.reset(key)
+        agent_state = meander_reset(env.const)
+
+        for step in range(5):
+            avail = env.get_avail_actions(state)
+            key, subkey = jax.random.split(key)
+            action, agent_state = meander_get_action(
+                agent_state, obs['red'], avail['red'], env.const, subkey
+            )
+
+            assert 0 <= int(action) < env.red_action_size
+
+            key, subkey = jax.random.split(key)
+            actions = {'blue': jnp.array(0), 'red': action}
+            obs, state, rewards, dones, info = env.step(subkey, state, actions)
+
+
+class TestHeuristicMeanderCAGE:
+    """Test HeuristicMeanderCAGE environment wrapper."""
+
+    def test_heuristic_meander_env_creates(self):
+        """Verify HeuristicMeanderCAGE can be created."""
+        from jaxmarl.environments.cage import HeuristicMeanderCAGE
+
+        env = HeuristicMeanderCAGE(scenario='Scenario2')
+
+        assert env.num_agents == 1
+        assert 'blue' in env.agents
+        assert env.name == "HeuristicMeanderCAGE-Scenario2"
+
+    def test_heuristic_meander_env_reset(self):
+        """Verify HeuristicMeanderCAGE reset works."""
+        from jaxmarl.environments.cage import HeuristicMeanderCAGE
+
+        env = HeuristicMeanderCAGE(scenario='Scenario2')
+        key = jax.random.PRNGKey(42)
+
+        obs, state = env.reset(key)
+
+        assert 'blue' in obs
+        assert hasattr(state, 'state')
+        assert hasattr(state, 'red_policy_state')
+
+    def test_heuristic_meander_env_step(self):
+        """Verify HeuristicMeanderCAGE step works."""
+        from jaxmarl.environments.cage import HeuristicMeanderCAGE
+
+        env = HeuristicMeanderCAGE(scenario='Scenario2', max_steps=100)
+        key = jax.random.PRNGKey(42)
+
+        obs, state = env.reset(key)
+
+        for step in range(10):
+            avail = env.get_avail_actions(state)
+            blue_valid = jnp.where(avail['blue'])[0]
+            blue_action = blue_valid[0]
+
+            key, subkey = jax.random.split(key)
+            obs, state, rewards, dones, info = env.step_env(
+                subkey, state, {'blue': blue_action}
+            )
+
+            assert 'blue' in obs
+            assert 'blue' in rewards
+            assert '__all__' in dones
+
+    def test_heuristic_meander_registered(self):
+        """Verify HeuristicMeanderCAGE is registered."""
+        from jaxmarl import make
+
+        env = make("HeuristicMeanderCAGE", scenario='Scenario2')
+        assert env is not None
+        assert env.name == "HeuristicMeanderCAGE-Scenario2"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -2,12 +2,18 @@
 
 from jaxmarl.environments.cage.cage_env import CageEnv, make_cage_env
 from jaxmarl.environments.cage.heuristic_red_cage_env import HeuristicRedCAGE
+from jaxmarl.environments.cage.heuristic_meander_cage_env import HeuristicMeanderCAGE
 from jaxmarl.environments.cage.scripted_agents import (
     BLineState,
     bline_reset,
     bline_get_action,
     bline_reset_batched,
     bline_get_action_batched,
+    MeanderState,
+    meander_reset,
+    meander_get_action,
+    meander_reset_batched,
+    meander_get_action_batched,
 )
 from jaxmarl.environments.cage.config import (
     ScenarioConfig,
@@ -56,12 +62,19 @@ __all__ = [
     'CageEnv',
     'make_cage_env',
     'HeuristicRedCAGE',
-    # Scripted agents
+    'HeuristicMeanderCAGE',
+    # Scripted agents - B_lineAgent
     'BLineState',
     'bline_reset',
     'bline_get_action',
     'bline_reset_batched',
     'bline_get_action_batched',
+    # Scripted agents - RedMeanderAgent
+    'MeanderState',
+    'meander_reset',
+    'meander_get_action',
+    'meander_reset_batched',
+    'meander_get_action_batched',
     # Configuration
     'ScenarioConfig',
     'HostConfig',

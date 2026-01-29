@@ -38,6 +38,7 @@ _IMPORT_MAP = {
     'JaxNav': ('.jaxnav', 'JaxNav'),
     'CageEnv': ('.cage', 'CageEnv'),
     'HeuristicRedCAGE': ('.cage', 'HeuristicRedCAGE'),
+    'HeuristicMeanderCAGE': ('.cage', 'HeuristicMeanderCAGE'),
 }
 
 def __getattr__(name):

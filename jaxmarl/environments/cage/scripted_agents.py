@@ -310,3 +310,393 @@ def bline_reset_batched(batch_size: int, key: chex.PRNGKey = None) -> BLineState
         last_action_success=jnp.ones(batch_size, dtype=jnp.bool_),
         target_user_idx=target_user_idx,
     )
+
+
+# ============================================================================
+# RedMeanderAgent - Exploratory/Opportunistic Red Agent
+# ============================================================================
+# Unlike B_lineAgent's fixed 16-state FSM, RedMeander explores the network
+# opportunistically: scans all discovered hosts, exploits available targets,
+# and escalates privileges where possible. The order of targets is randomized.
+
+
+@struct.dataclass
+class MeanderState:
+    """State for RedMeanderAgent exploratory behavior."""
+    scanned_subnets: chex.Array      # (num_subnets,) bool - subnets we've run DiscoverRemoteSystems on
+    scanned_ips: chex.Array          # (num_hosts,) bool - hosts we've run DiscoverNetworkServices on
+    exploited_ips: chex.Array        # (num_hosts,) bool - hosts we've successfully exploited
+    escalated_hosts: chex.Array      # (num_hosts,) bool - hosts where we've escalated privileges
+    host_ip_known: chex.Array        # (num_hosts,) bool - hosts where we learned IP→host mapping
+    last_host_idx: chex.Array        # scalar int (-1 = none) - last host we tried PrivEsc on
+    last_ip_idx: chex.Array          # scalar int (-1 = none) - last host we tried Exploit on
+    last_action_success: chex.Array  # scalar bool - result of last action
+
+
+def meander_reset(const: CageConst, key: chex.PRNGKey = None) -> MeanderState:
+    """Reset MeanderState to initial state.
+
+    Args:
+        const: Environment constants for array sizing
+        key: Random key (unused, for API compatibility)
+
+    Returns:
+        Fresh MeanderState with all tracking arrays zeroed
+    """
+    return MeanderState(
+        scanned_subnets=jnp.zeros(const.num_subnets, dtype=jnp.bool_),
+        scanned_ips=jnp.zeros(const.num_hosts, dtype=jnp.bool_),
+        exploited_ips=jnp.zeros(const.num_hosts, dtype=jnp.bool_),
+        escalated_hosts=jnp.zeros(const.num_hosts, dtype=jnp.bool_),
+        host_ip_known=jnp.zeros(const.num_hosts, dtype=jnp.bool_),
+        last_host_idx=jnp.array(-1, dtype=jnp.int32),
+        last_ip_idx=jnp.array(-1, dtype=jnp.int32),
+        last_action_success=jnp.array(True, dtype=jnp.bool_),
+    )
+
+
+def meander_get_action(
+    agent_state: MeanderState,
+    red_obs: chex.Array,
+    action_mask: chex.Array,
+    const: CageConst,
+    key: chex.PRNGKey,
+) -> Tuple[chex.Array, MeanderState]:
+    """Get RedMeanderAgent action based on opportunistic exploration.
+
+    Priority order (from CybORG's Meander.py):
+    1. Impact Op_Server0 if escalated there
+    2. DiscoverSubnet for unscanned subnets (random order)
+    3. DiscoverNetworkServices on discovered but unscanned hosts (random order)
+    4. PrivilegeEscalate on exploited but not escalated hosts (random order)
+    5. ExploitRemoteService on scanned but not exploited hosts (random order)
+
+    On failure, we backtrack by removing the failed host from our tracking.
+
+    Args:
+        agent_state: Current MeanderState
+        red_obs: Red agent observation (first element is last_action_success)
+        action_mask: Valid action mask
+        const: Environment constants
+        key: Random key for shuffling targets
+
+    Returns:
+        Tuple of (action_index, new_agent_state)
+    """
+    last_success = red_obs[0] > 0.5
+
+    agent_state = _meander_process_result(agent_state, last_success, const)
+
+    discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
+
+    key, k1, k2, k3, k4 = jax.random.split(key, 5)
+
+    op_server0 = const.bline_op_server0
+    can_impact = agent_state.escalated_hosts[op_server0]
+    impact_action = impact_start + op_server0
+
+    def do_impact(_):
+        return impact_action, agent_state
+
+    def try_discover_or_continue(_):
+        subnet_perm = jax.random.permutation(k1, const.num_subnets)
+
+        def find_unscanned_subnet(carry, subnet_idx):
+            found, action, state = carry
+            subnet = subnet_perm[subnet_idx]
+            is_unscanned = ~state.scanned_subnets[subnet]
+            is_valid = action_mask[discover_start + subnet]
+            should_use = ~found & is_unscanned & is_valid
+
+            new_state = jax.lax.cond(
+                should_use,
+                lambda s: s.replace(scanned_subnets=s.scanned_subnets.at[subnet].set(True)),
+                lambda s: s,
+                state,
+            )
+            new_action = jnp.where(should_use, discover_start + subnet, action)
+            new_found = found | should_use
+
+            return (new_found, new_action, new_state), None
+
+        (found_discover, discover_action, state_after_discover), _ = jax.lax.scan(
+            find_unscanned_subnet,
+            (False, jnp.array(0, dtype=jnp.int32), agent_state),
+            jnp.arange(const.num_subnets),
+        )
+
+        def do_discover(_):
+            return discover_action, state_after_discover
+
+        def try_scan_or_continue(_):
+            host_perm = jax.random.permutation(k2, const.num_hosts)
+
+            def find_unscannable_host(carry, host_idx):
+                found, action, state = carry
+                host = host_perm[host_idx]
+                is_unscanned = ~state.scanned_ips[host]
+                is_valid = action_mask[scan_start + host]
+                should_use = ~found & is_unscanned & is_valid
+
+                new_state = jax.lax.cond(
+                    should_use,
+                    lambda s: s.replace(scanned_ips=s.scanned_ips.at[host].set(True)),
+                    lambda s: s,
+                    state,
+                )
+                new_action = jnp.where(should_use, scan_start + host, action)
+                new_found = found | should_use
+
+                return (new_found, new_action, new_state), None
+
+            (found_scan, scan_action, state_after_scan), _ = jax.lax.scan(
+                find_unscannable_host,
+                (False, jnp.array(0, dtype=jnp.int32), state_after_discover),
+                jnp.arange(const.num_hosts),
+            )
+
+            def do_scan(_):
+                return scan_action, state_after_scan
+
+            def try_privesc_or_continue(_):
+                host_perm_privesc = jax.random.permutation(k3, const.num_hosts)
+
+                def find_privesc_host(carry, host_idx):
+                    found, action, state = carry
+                    host = host_perm_privesc[host_idx]
+                    is_exploited = state.exploited_ips[host]
+                    is_not_escalated = ~state.escalated_hosts[host]
+                    is_valid = action_mask[privesc_start + host]
+                    should_use = ~found & is_exploited & is_not_escalated & is_valid
+
+                    new_state = jax.lax.cond(
+                        should_use,
+                        lambda s: s.replace(
+                            escalated_hosts=s.escalated_hosts.at[host].set(True),
+                            last_host_idx=host,
+                        ),
+                        lambda s: s,
+                        state,
+                    )
+                    new_action = jnp.where(should_use, privesc_start + host, action)
+                    new_found = found | should_use
+
+                    return (new_found, new_action, new_state), None
+
+                (found_privesc, privesc_action, state_after_privesc), _ = jax.lax.scan(
+                    find_privesc_host,
+                    (False, jnp.array(0, dtype=jnp.int32), state_after_scan),
+                    jnp.arange(const.num_hosts),
+                )
+
+                def do_privesc(_):
+                    return privesc_action, state_after_privesc
+
+                def try_exploit_or_sleep(_):
+                    host_perm_exploit = jax.random.permutation(k4, const.num_hosts)
+
+                    def find_exploit_host(carry, host_idx):
+                        found, action, state = carry
+                        host = host_perm_exploit[host_idx]
+                        is_scanned = state.scanned_ips[host]
+                        is_not_exploited = ~state.exploited_ips[host]
+
+                        exploit_type = _get_host_first_exploit(host, const)
+                        exploit_action_idx = exploit_start + host * const.num_exploits + exploit_type
+                        is_valid = action_mask[exploit_action_idx]
+
+                        should_use = ~found & is_scanned & is_not_exploited & is_valid
+
+                        new_state = jax.lax.cond(
+                            should_use,
+                            lambda s: s.replace(
+                                exploited_ips=s.exploited_ips.at[host].set(True),
+                                last_ip_idx=host,
+                            ),
+                            lambda s: s,
+                            state,
+                        )
+                        new_action = jnp.where(should_use, exploit_action_idx, action)
+                        new_found = found | should_use
+
+                        return (new_found, new_action, new_state), None
+
+                    (found_exploit, exploit_action, state_after_exploit), _ = jax.lax.scan(
+                        find_exploit_host,
+                        (False, jnp.array(0, dtype=jnp.int32), state_after_privesc),
+                        jnp.arange(const.num_hosts),
+                    )
+
+                    def do_exploit(_):
+                        return exploit_action, state_after_exploit
+
+                    def do_sleep(_):
+                        return jnp.array(0, dtype=jnp.int32), state_after_privesc
+
+                    return jax.lax.cond(found_exploit, do_exploit, do_sleep, None)
+
+                return jax.lax.cond(found_privesc, do_privesc, try_exploit_or_sleep, None)
+
+            return jax.lax.cond(found_scan, do_scan, try_privesc_or_continue, None)
+
+        return jax.lax.cond(found_discover, do_discover, try_scan_or_continue, None)
+
+    action, new_state = jax.lax.cond(can_impact, do_impact, try_discover_or_continue, None)
+
+    action = jax.lax.cond(
+        action_mask[action],
+        lambda: action,
+        lambda: jnp.array(0, dtype=jnp.int32),
+    )
+
+    new_state = new_state.replace(last_action_success=last_success)
+
+    return action, new_state
+
+
+def _meander_process_result(
+    state: MeanderState,
+    success: chex.Array,
+    const: CageConst,
+) -> MeanderState:
+    """Process the result of the last action and update state accordingly.
+
+    On exploit failure: remove from exploited_ips, cascade remove Op/Enterprise hosts
+    On privesc failure: remove from escalated_hosts AND exploited_ips
+
+    Args:
+        state: Current MeanderState
+        success: Whether last action succeeded
+        const: Environment constants
+
+    Returns:
+        Updated MeanderState with failed hosts removed from tracking
+    """
+    had_last_ip = state.last_ip_idx >= 0
+    had_last_host = state.last_host_idx >= 0
+
+    def process_exploit_result(s):
+        def on_exploit_fail(s):
+            ip_idx = s.last_ip_idx
+            new_exploited = s.exploited_ips.at[ip_idx].set(False)
+
+            def is_op_host(host_idx):
+                return (host_idx >= 4) & (host_idx <= 7)
+
+            def is_ent_host(host_idx):
+                return (host_idx >= 1) & (host_idx <= 3)
+
+            has_op = jnp.any(s.escalated_hosts & jax.vmap(is_op_host)(jnp.arange(const.num_hosts)))
+
+            def remove_op_hosts(new_exploited, new_escalated):
+                for i in range(4, 8):
+                    should_remove = s.escalated_hosts[i]
+                    new_escalated = jnp.where(should_remove, new_escalated.at[i].set(False), new_escalated)
+                    new_exploited = jnp.where(should_remove, new_exploited.at[i].set(False), new_exploited)
+                return new_exploited, new_escalated
+
+            def remove_ent_hosts(new_exploited, new_escalated):
+                has_ent = jnp.any(s.escalated_hosts & jax.vmap(is_ent_host)(jnp.arange(const.num_hosts)))
+                for i in range(1, 4):
+                    should_remove = s.escalated_hosts[i] & has_ent
+                    new_escalated = jnp.where(should_remove, new_escalated.at[i].set(False), new_escalated)
+                    new_exploited = jnp.where(should_remove, new_exploited.at[i].set(False), new_exploited)
+                return new_exploited, new_escalated
+
+            new_escalated = s.escalated_hosts
+
+            new_exploited, new_escalated = jax.lax.cond(
+                has_op,
+                lambda args: remove_op_hosts(*args),
+                lambda args: remove_ent_hosts(*args),
+                (new_exploited, new_escalated),
+            )
+
+            return s.replace(
+                exploited_ips=new_exploited,
+                escalated_hosts=new_escalated,
+                last_ip_idx=jnp.array(-1, dtype=jnp.int32),
+            )
+
+        def on_exploit_success(s):
+            return s.replace(
+                host_ip_known=s.host_ip_known.at[s.last_ip_idx].set(True),
+                last_ip_idx=jnp.array(-1, dtype=jnp.int32),
+            )
+
+        return jax.lax.cond(success, on_exploit_success, on_exploit_fail, s)
+
+    def no_exploit_processing(s):
+        return s
+
+    state = jax.lax.cond(had_last_ip, process_exploit_result, no_exploit_processing, state)
+
+    def process_privesc_result(s):
+        def on_privesc_fail(s):
+            host_idx = s.last_host_idx
+            new_escalated = s.escalated_hosts.at[host_idx].set(False)
+            new_exploited = s.exploited_ips.at[host_idx].set(False)
+            return s.replace(
+                escalated_hosts=new_escalated,
+                exploited_ips=new_exploited,
+                last_host_idx=jnp.array(-1, dtype=jnp.int32),
+            )
+
+        def on_privesc_success(s):
+            return s.replace(last_host_idx=jnp.array(-1, dtype=jnp.int32))
+
+        return jax.lax.cond(success, on_privesc_success, on_privesc_fail, s)
+
+    def no_privesc_processing(s):
+        return s
+
+    state = jax.lax.cond(had_last_host, process_privesc_result, no_privesc_processing, state)
+
+    return state
+
+
+def meander_get_action_batched(
+    agent_states: MeanderState,
+    red_obs: chex.Array,
+    action_masks: chex.Array,
+    const: CageConst,
+    keys: chex.PRNGKey,
+) -> Tuple[chex.Array, MeanderState]:
+    """Batched version of meander_get_action.
+
+    Args:
+        agent_states: Batched MeanderState with shape (batch_size,) for each field
+        red_obs: Red observations with shape (batch_size, obs_dim)
+        action_masks: Action masks with shape (batch_size, num_actions)
+        const: Environment constants (shared)
+        keys: Random keys with shape (batch_size, 2)
+
+    Returns:
+        Tuple of (actions with shape (batch_size,), new_agent_states)
+    """
+    return jax.vmap(meander_get_action, in_axes=(0, 0, 0, None, 0))(
+        agent_states, red_obs, action_masks, const, keys
+    )
+
+
+def meander_reset_batched(batch_size: int, const: CageConst, key: chex.PRNGKey = None) -> MeanderState:
+    """Create batched initial MeanderState.
+
+    Args:
+        batch_size: Number of parallel environments
+        const: Environment constants for array sizing
+        key: Random key (unused, for API compatibility)
+
+    Returns:
+        MeanderState with batched arrays
+    """
+    return MeanderState(
+        scanned_subnets=jnp.zeros((batch_size, const.num_subnets), dtype=jnp.bool_),
+        scanned_ips=jnp.zeros((batch_size, const.num_hosts), dtype=jnp.bool_),
+        exploited_ips=jnp.zeros((batch_size, const.num_hosts), dtype=jnp.bool_),
+        escalated_hosts=jnp.zeros((batch_size, const.num_hosts), dtype=jnp.bool_),
+        host_ip_known=jnp.zeros((batch_size, const.num_hosts), dtype=jnp.bool_),
+        last_host_idx=jnp.full(batch_size, -1, dtype=jnp.int32),
+        last_ip_idx=jnp.full(batch_size, -1, dtype=jnp.int32),
+        last_action_success=jnp.ones(batch_size, dtype=jnp.bool_),
+    )
