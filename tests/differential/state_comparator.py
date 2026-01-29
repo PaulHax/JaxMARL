@@ -41,12 +41,27 @@ class StateSnapshot:
     red_scanned_hosts: Dict[str, bool] = field(default_factory=dict)
     host_activity_detected: Dict[str, bool] = field(default_factory=dict)
     ot_service_stopped: Dict[str, bool] = field(default_factory=dict)
+    host_decoys: Dict[str, List[int]] = field(default_factory=dict)  # hostname -> list of decoy type indices
     blue_obs: Optional[np.ndarray] = None
     red_obs: Optional[np.ndarray] = None
     reward_blue: float = 0.0
     reward_red: float = 0.0
     last_red_action_success: bool = False
     time: int = 0
+
+
+# Map CybORG process names (lowercase) to JAX decoy type indices
+# CybORG uses various capitalization (apache2, Smss.exe, etc.) - we compare lowercase
+CYBORG_PROCESS_TO_DECOY_IDX = {
+    'apache2': 0,      # DecoyApache
+    'femitter': 1,     # DecoyFemitter
+    'haraka': 2,       # DecoyHarakaSMPT
+    'smss.exe': 3,     # DecoySmss
+    'sshd.exe': 4,     # DecoySSHD
+    'svchost.exe': 5,  # DecoySvchost
+    'tomcat.exe': 6,   # DecoyTomcat
+    'vsftpd': 7,       # DecoyVsftpd
+}
 
 
 def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
@@ -120,6 +135,24 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
     rewards = cyborg_env.get_rewards()
     snapshot.reward_blue = rewards.get('Blue', 0.0)
     snapshot.reward_red = rewards.get('Red', 0.0)
+
+    # Extract decoys from host processes
+    try:
+        state = cyborg_env.environment_controller.state
+        for hostname in HOST_IDS.keys():
+            snapshot.host_decoys[hostname] = []
+            if hostname in state.hosts:
+                host = state.hosts[hostname]
+                if host.processes:
+                    for proc in host.processes:
+                        if hasattr(proc, 'decoy_type') and proc.decoy_type:
+                            proc_name = getattr(proc, 'name', '').lower()
+                            if proc_name in CYBORG_PROCESS_TO_DECOY_IDX:
+                                decoy_idx = CYBORG_PROCESS_TO_DECOY_IDX[proc_name]
+                                if decoy_idx not in snapshot.host_decoys[hostname]:
+                                    snapshot.host_decoys[hostname].append(decoy_idx)
+    except Exception:
+        pass
 
     if include_obs:
         try:
@@ -225,6 +258,15 @@ def extract_jax_state(state: CageState, const: CageConst, include_obs: bool = Tr
     snapshot.last_red_action_success = bool(state.last_red_action_success)
     snapshot.time = int(state.time)
 
+    # Extract decoys from JAX state array
+    num_decoys = state.host_decoys.shape[1] if len(state.host_decoys.shape) > 1 else 0
+    for hostname, idx in HOST_IDS.items():
+        decoy_list = []
+        for decoy_type in range(num_decoys):
+            if state.host_decoys[idx, decoy_type]:
+                decoy_list.append(decoy_type)
+        snapshot.host_decoys[hostname] = decoy_list
+
     if include_obs:
         snapshot.blue_obs = np.array(get_blue_obs(state, const))
         snapshot.red_obs = np.array(get_red_obs(state, const))
@@ -319,6 +361,18 @@ def compare_states(
                 cyborg_value=cyborg_scanned,
                 jax_value=jax_scanned,
                 severity='warning',  # CybORG doesn't track this explicitly
+            ))
+
+        # Compare decoys
+        cyborg_decoys = set(cyborg_state.host_decoys.get(hostname, []))
+        jax_decoys = set(jax_state.host_decoys.get(hostname, []))
+        if cyborg_decoys != jax_decoys:
+            diffs.append(StateDiff(
+                field='host_decoys',
+                host=hostname,
+                cyborg_value=sorted(cyborg_decoys),
+                jax_value=sorted(jax_decoys),
+                severity='error',  # Decoys affect exploit success
             ))
 
     if check_rewards:
