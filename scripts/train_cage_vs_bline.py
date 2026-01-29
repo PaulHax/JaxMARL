@@ -138,9 +138,9 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
 
         avail = jax.vmap(env.get_avail_actions)(env_states)
 
-        # Blue: learned policy with action masking via distrax
+        # Blue: learned policy (no action masking for better transfer)
         pi, blue_values = train_state_blue.apply_fn(
-            train_state_blue.params, obs['blue'], avail['blue']
+            train_state_blue.params, obs['blue'], None
         )
         blue_actions = pi.sample(seed=key_blue)
         blue_log_probs = pi.log_prob(blue_actions)
@@ -576,9 +576,8 @@ def train(args):
         total_steps += args.num_envs * args.rollout_steps
 
         # Compute bootstrap value for GAE (value of final observation)
-        final_avail = jax.vmap(env.get_avail_actions)(env_states)
         _, last_val = train_state_blue.apply_fn(
-            train_state_blue.params, final_obs['blue'], final_avail['blue']
+            train_state_blue.params, final_obs['blue'], None
         )
 
         adv_blue, ret_blue = compute_gae(
@@ -624,7 +623,7 @@ def train(args):
                         values_blue[mb_indices],
                         adv_blue_flat[mb_indices],
                         ret_blue_flat[mb_indices],
-                        avail_blue[mb_indices],
+                        None,  # No action masking for better transfer
                         ent_coef=args.ent_coef,
                     )
                 else:
@@ -636,7 +635,7 @@ def train(args):
                         values_blue[mb_indices],
                         adv_blue_flat[mb_indices],
                         ret_blue_flat[mb_indices],
-                        avail_blue[mb_indices],
+                        None,  # No action masking for better transfer
                         ent_coef=args.ent_coef,
                     )
 
