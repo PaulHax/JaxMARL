@@ -154,6 +154,18 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
     except Exception:
         pass
 
+    # Extract OT service status (Impact action stops OTService on Op_Server0)
+    try:
+        state = cyborg_env.environment_controller.state
+        if 'Op_Server0' in state.hosts:
+            host = state.hosts['Op_Server0']
+            if hasattr(host, 'services') and 'OTService' in host.services:
+                ot_svc = host.services['OTService']
+                # OTService is stopped when 'active' is False
+                snapshot.ot_service_stopped['Op_Server0'] = not ot_svc.get('active', True)
+    except Exception:
+        pass
+
     if include_obs:
         try:
             blue_obs_dict = cyborg_env.get_observation('Blue')
