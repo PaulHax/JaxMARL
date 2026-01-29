@@ -181,11 +181,9 @@ def make_train(config):
 
                 obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
 
-                avail_actions = jax.vmap(env.get_avail_actions)(env_state.env_state)
-                avail_batch = batchify(avail_actions, env.agents, config["NUM_ACTORS"])
-
+                # No action masking - policy learns valid actions from experience
                 rng, _rng = jax.random.split(rng)
-                pi, value = network.apply(train_state.params, obs_batch, avail_batch)
+                pi, value = network.apply(train_state.params, obs_batch, None)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
@@ -198,6 +196,8 @@ def make_train(config):
                 )
 
                 info = jax.tree.map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
+                # Dummy avail_actions (not used for masking, just to keep Transition structure)
+                dummy_avail = jnp.ones((config["NUM_ACTORS"], env.action_space(env.agents[0]).n))
                 transition = Transition(
                     batchify(done, env.agents, config["NUM_ACTORS"]).squeeze(),
                     action,
@@ -205,7 +205,7 @@ def make_train(config):
                     batchify(reward, env.agents, config["NUM_ACTORS"]).squeeze(),
                     log_prob,
                     obs_batch,
-                    avail_batch,
+                    dummy_avail,
                     info,
                 )
                 runner_state = (train_state, env_state, obsv, rng)
@@ -217,9 +217,7 @@ def make_train(config):
 
             train_state, env_state, last_obs, rng = runner_state
             last_obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
-            avail_actions = jax.vmap(env.get_avail_actions)(env_state.env_state)
-            last_avail_batch = batchify(avail_actions, env.agents, config["NUM_ACTORS"])
-            _, last_val = network.apply(train_state.params, last_obs_batch, last_avail_batch)
+            _, last_val = network.apply(train_state.params, last_obs_batch, None)
 
             def _calculate_gae(traj_batch, last_val):
                 def _get_advantages(gae_and_next_value, transition):
@@ -252,7 +250,7 @@ def make_train(config):
                     traj_batch, advantages, targets = batch_info
 
                     def _loss_fn(params, traj_batch, gae, targets):
-                        pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
+                        pi, value = network.apply(params, traj_batch.obs, None)
                         log_prob = pi.log_prob(traj_batch.action)
 
                         value_pred_clipped = traj_batch.value + (
