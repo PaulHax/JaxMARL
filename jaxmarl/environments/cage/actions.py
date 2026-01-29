@@ -413,11 +413,13 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
 
 
 def _apply_decoy(state: CageState, target_host: int, decoy_type: int, const: CageConst) -> CageState:
-    """Deploy decoy on target host if port is available (matching CybORG behavior).
+    """Deploy decoy on target host if port available and OS compatible (matching CybORG).
 
-    In CybORG, decoy deployment fails (returns success=FALSE) if the port is already
-    in use by an existing service. We match this by only setting the decoy flag if
-    the port is available.
+    In CybORG, decoy deployment fails (returns success=FALSE) if:
+    1. The port is already in use by an existing service
+    2. The decoy requires a specific OS (Windows/Linux) that the host doesn't have
+
+    We match this by only setting the decoy flag if both conditions pass.
     """
     # Check port conflict using DECOY_SERVICE_CONFLICTS
     conflict1 = DECOY_SERVICE_CONFLICTS[decoy_type, 0]
@@ -426,8 +428,14 @@ def _apply_decoy(state: CageState, target_host: int, decoy_type: int, const: Cag
     has_conflict2 = jnp.where(conflict2 >= 0, state.host_services[target_host, conflict2], False)
     port_available = ~has_conflict1 & ~has_conflict2
 
-    # Only deploy if port is available
-    new_decoy_value = jnp.where(port_available, True, state.host_decoys[target_host, decoy_type])
+    # Check OS compatibility using DECOY_OS_ARRAY
+    required_os = DECOY_OS_ARRAY[decoy_type]
+    host_os = const.host_os[target_host]
+    os_compatible = (required_os == OS_ANY) | (required_os == host_os)
+
+    # Only deploy if port available AND OS compatible
+    can_deploy = port_available & os_compatible
+    new_decoy_value = jnp.where(can_deploy, True, state.host_decoys[target_host, decoy_type])
 
     return state.replace(
         host_decoys=state.host_decoys.at[target_host, decoy_type].set(new_decoy_value),
