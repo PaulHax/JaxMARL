@@ -142,7 +142,8 @@ def cyborg_blue_action_to_jax(action, cyborg_env, const: Optional[CageConst] = N
         if hostname and hostname in HOST_IDS and class_name in DECOY_NAME_TO_IDX:
             host_idx = HOST_IDS[hostname]
             decoy_type = DECOY_NAME_TO_IDX[class_name]
-            return BLUE_DECOY_START + host_idx * NUM_DECOY_TYPES + decoy_type
+            # CybORG encoding: decoy_type * num_hosts + host_idx
+            return BLUE_DECOY_START + decoy_type * NUM_HOSTS + host_idx
         return BLUE_SLEEP
 
     return BLUE_SLEEP
@@ -343,8 +344,9 @@ def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
 
     if BLUE_DECOY_START <= action_idx < BLUE_RESTORE_START:
         offset = action_idx - BLUE_DECOY_START
-        host_idx = offset // NUM_DECOY_TYPES
-        decoy_idx = offset % NUM_DECOY_TYPES
+        # CybORG encoding: decoy_type * num_hosts + host_idx
+        decoy_idx = offset // NUM_HOSTS
+        host_idx = offset % NUM_HOSTS
         hostname = HOST_NAMES.get(host_idx)
         if hostname and decoy_idx < len(DECOY_CLASSES):
             decoy_class = DECOY_CLASSES[decoy_idx]
@@ -478,8 +480,9 @@ def describe_jax_blue_action(action_idx: int) -> str:
 
     if BLUE_DECOY_START <= action_idx < BLUE_RESTORE_START:
         offset = action_idx - BLUE_DECOY_START
-        host_idx = offset // NUM_DECOY_TYPES
-        decoy_idx = offset % NUM_DECOY_TYPES
+        # CybORG encoding: decoy_type * num_hosts + host_idx
+        decoy_idx = offset // NUM_HOSTS
+        host_idx = offset % NUM_HOSTS
         hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
         decoy_names = list(DECOY_NAME_TO_IDX.keys())
         decoy_name = decoy_names[decoy_idx] if decoy_idx < len(decoy_names) else f"decoy_{decoy_idx}"

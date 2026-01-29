@@ -83,8 +83,11 @@ def blue_restore_host(hostname: str) -> int:
 
 
 def blue_decoy_host(hostname: str, decoy_type: int) -> int:
-    """Get action index for deploying decoy on host."""
-    return BLUE_DECOY_START + HOST_IDS[hostname] * NUM_DECOY_TYPES + decoy_type
+    """Get action index for deploying decoy on host.
+
+    CybORG encoding: decoy_type * num_hosts + host_idx
+    """
+    return BLUE_DECOY_START + decoy_type * NUM_HOSTS + HOST_IDS[hostname]
 
 
 BLINE_KILLCHAIN_STANDARD = [
