@@ -277,12 +277,22 @@ def make_train(config):
                         loss_actor = loss_actor.mean()
                         entropy = pi.entropy().mean()
 
+                        logratio = log_prob - traj_batch.log_prob
+                        approx_kl = jnp.mean((ratio - 1) - logratio)
+                        clip_frac = jnp.mean(jnp.abs(ratio - 1) > config["CLIP_EPS"])
+                        var_targets = jnp.var(targets)
+                        explained_var = jnp.where(
+                            var_targets > 0,
+                            1 - jnp.var(targets - value) / var_targets,
+                            0.0
+                        )
+
                         total_loss = (
                             loss_actor
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                         )
-                        return total_loss, (value_loss, loss_actor, entropy, ratio)
+                        return total_loss, (value_loss, loss_actor, entropy, approx_kl, clip_frac, explained_var)
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
@@ -295,7 +305,9 @@ def make_train(config):
                         "actor_loss": total_loss[1][1],
                         "critic_loss": total_loss[1][0],
                         "entropy": total_loss[1][2],
-                        "ratio": total_loss[1][3],
+                        "approx_kl": total_loss[1][3],
+                        "clip_frac": total_loss[1][4],
+                        "explained_var": total_loss[1][5],
                     }
 
                     return train_state, loss_info
@@ -334,10 +346,9 @@ def make_train(config):
             metric = traj_batch.info
             rng = update_state[-1]
 
-            r0 = {"ratio0": loss_info["ratio"][0, 0].mean()}
             loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
             metric = jax.tree.map(lambda x: x.mean(), metric)
-            metric = {**metric, **loss_info, **r0}
+            metric = {**metric, **loss_info}
             jax.experimental.io_callback(callback, None, metric, update_state[0].step)
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
@@ -459,6 +470,9 @@ def main(config):
             "actor_loss": float(metrics["actor_loss"][update_idx].mean()),
             "critic_loss": float(metrics["critic_loss"][update_idx].mean()),
             "entropy": float(metrics["entropy"][update_idx].mean()),
+            "approx_kl": float(metrics["approx_kl"][update_idx].mean()),
+            "clip_frac": float(metrics["clip_frac"][update_idx].mean()),
+            "explained_var": float(metrics["explained_var"][update_idx].mean()),
         }
         metrics_logger.log(update_metrics, step=step)
 
