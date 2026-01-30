@@ -70,11 +70,12 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
     # Compromised encoding: No=[0,0], User=[0,1], Priv=[1,1], Unknown=[1,0]
     # CybORG's BlueTableWrapper detects:
     # - User: when shell connection detected (port 4444) → has_session
-    # - Privileged: when malware detected (density >= 0.9) → host_has_malware
+    # - Privileged: when malware detected via Analyse (DensityScout) → host_malware_detected
     # Note: Red may have higher actual privilege than Blue can observe
+    # Blue must use Analyse to detect malware; PrivEsc alone doesn't reveal Privileged
     visible_session = has_session & ~initial_foothold_mask
-    has_malware = state.host_has_malware & ~initial_foothold_mask
-    compromised_0 = has_malware.astype(jnp.float32)
+    malware_detected = state.host_malware_detected & ~initial_foothold_mask
+    compromised_0 = malware_detected.astype(jnp.float32)
     compromised_1 = visible_session.astype(jnp.float32)
 
     # After Remove, compromised shows Unknown [1,0] until Restore

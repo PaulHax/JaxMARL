@@ -128,6 +128,10 @@ class CageState:
     # This is separate from Red's actual privilege level
     host_has_malware: chex.Array  # (max_hosts,) bool: malware present (from PrivilegeEscalate)
 
+    # Malware detection - tracks whether Blue has discovered malware via Analyse
+    # CybORG requires Analyse action to detect malware files; PrivEsc alone doesn't reveal Privileged
+    host_malware_detected: chex.Array  # (max_hosts,) bool: Blue has detected malware via Analyse
+
 
 @struct.dataclass
 class CageConst:
@@ -348,6 +352,7 @@ def create_initial_state(const: CageConst) -> CageState:
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
         red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.int32),
         host_has_malware=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_malware_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 
 

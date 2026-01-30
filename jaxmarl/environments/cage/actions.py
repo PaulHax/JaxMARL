@@ -314,10 +314,11 @@ def _apply_monitor(state: CageState, const: CageConst) -> CageState:
 
 
 def _apply_analyse(state: CageState, target_host: int, const: CageConst) -> CageState:
-    """Analyse action: detect activity on target host, clear its unknown flag.
+    """Analyse action: detect activity and malware on target host, clear unknown flag.
 
-    CybORG behavior: Analyse detects anomalies on the target host, including
-    persistent Red presence (matching what observations show).
+    CybORG behavior: Analyse runs DensityScout which detects malware files
+    (Density >= 0.9). This is the ONLY way Blue can see Privileged compromise.
+    Also detects persistent Red presence (sessions).
     """
     # Detect recent activity OR persistent Red presence on target host
     has_recent_activity = state.red_activity_this_step[target_host] > ACTIVITY_NONE
@@ -333,9 +334,21 @@ def _apply_analyse(state: CageState, target_host: int, const: CageConst) -> Cage
         state.host_activity_detected.at[target_host].set(True),
         state.host_activity_detected,
     )
+
+    # Analyse detects malware via DensityScout - reveals Privileged compromise
+    # Only Analyse can detect malware; PrivEsc sets host_has_malware but Blue
+    # doesn't see Privileged until Analyse discovers it
+    has_malware = state.host_has_malware[target_host]
+    new_malware_detected = jnp.where(
+        has_malware,
+        state.host_malware_detected.at[target_host].set(True),
+        state.host_malware_detected,
+    )
+
     return state.replace(
         host_activity_detected=new_detected,
         host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
+        host_malware_detected=new_malware_detected,
     )
 
 
@@ -414,6 +427,7 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
         host_activity_detected=state.host_activity_detected.at[target_host].set(False),
         host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
         host_has_malware=state.host_has_malware.at[target_host].set(False),
+        host_malware_detected=state.host_malware_detected.at[target_host].set(False),
     )
 
 
