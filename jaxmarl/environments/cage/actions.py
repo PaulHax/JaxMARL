@@ -675,7 +675,18 @@ def _apply_exploit(
     # Detection: 95% of exploits are detectable (matching CybORG's detection_rate = 0.95)
     # 5% of exploits succeed silently and cannot be detected by Blue
     is_detected = jax.random.uniform(key) < EXPLOIT_DETECTION_RATE
-    activity_visible = success & is_detected
+
+    # Log activity even when decoy blocks (CybORG logs NetworkConnections in ExploitAction.py:108-110)
+    host_scanned = state.red_scanned_hosts_jax[target_host]
+    attempted_with_decoy = host_scanned & has_vulnerable_service & decoy_present
+    activity_visible = (success | attempted_with_decoy) & is_detected
+
+    # Set malware on successful exploit (CybORG creates cmd.exe/cmd.sh with density=0.9)
+    new_malware = jnp.where(
+        success,
+        True,
+        state.host_has_malware[target_host],
+    )
 
     return state.replace(
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
@@ -684,6 +695,7 @@ def _apply_exploit(
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
             jnp.where(activity_visible, ACTIVITY_EXPLOIT, state.red_activity_this_step[target_host])
         ),
+        host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
         last_red_action_success=success,
     )
 

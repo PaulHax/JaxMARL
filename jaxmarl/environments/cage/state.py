@@ -132,6 +132,9 @@ class CageState:
     # CybORG requires Analyse action to detect malware files; PrivEsc alone doesn't reveal Privileged
     host_malware_detected: chex.Array  # (max_hosts,) bool: Blue has detected malware via Analyse
 
+    # Malware presence - set when exploit succeeds (CybORG creates cmd.exe/cmd.sh with density=0.9)
+    host_has_malware: chex.Array  # (max_hosts,) bool: malware installed by exploit
+
 
 @struct.dataclass
 class CageConst:
