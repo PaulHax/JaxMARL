@@ -9,6 +9,7 @@ from typing import Tuple
 from jaxmarl.environments.cage.state import (
     CageState, CageConst,
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
+    ACTIVITY_NONE, ACTIVITY_SCAN, ACTIVITY_EXPLOIT,
     EXPLOIT_IDS, NUM_DECOY_TYPES, OS_LINUX, OS_WINDOWS, DECOY_IDS,
 )
 from jaxmarl.environments.cage.config import DECOY_OS_RESTRICTIONS, OS_ANY
@@ -295,8 +296,8 @@ def _apply_monitor(state: CageState, const: CageConst) -> CageState:
     observations show Red sessions as persistent anomalies, Monitor should
     also detect these. The initial foothold is hidden (part of baseline).
     """
-    # Detect recent activity
-    recent_activity = state.red_activity_this_step
+    # Detect recent activity (any non-zero activity type means activity occurred)
+    recent_activity = state.red_activity_this_step > ACTIVITY_NONE
 
     # Detect persistent Red presence (sessions), excluding initial foothold
     # This matches what observations show to Blue
@@ -319,7 +320,7 @@ def _apply_analyse(state: CageState, target_host: int, const: CageConst) -> Cage
     persistent Red presence (matching what observations show).
     """
     # Detect recent activity OR persistent Red presence on target host
-    has_recent_activity = state.red_activity_this_step[target_host]
+    has_recent_activity = state.red_activity_this_step[target_host] > ACTIVITY_NONE
     has_red_session = state.red_sessions[target_host] > 0
 
     # Check if this is the initial foothold (hidden from Blue)
@@ -552,7 +553,7 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
             state.red_scanned_hosts_jax[target_host] | can_scan
         ),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            state.red_activity_this_step[target_host] | can_scan
+            jnp.where(can_scan, ACTIVITY_SCAN, state.red_activity_this_step[target_host])
         ),
         last_red_action_success=can_scan,
     )
@@ -653,7 +654,7 @@ def _apply_exploit(
         red_sessions=state.red_sessions.at[target_host].set(new_sessions),
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            state.red_activity_this_step[target_host] | activity_visible
+            jnp.where(activity_visible, ACTIVITY_EXPLOIT, state.red_activity_this_step[target_host])
         ),
         last_red_action_success=success,
     )
@@ -693,9 +694,6 @@ def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> Cag
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
         host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
-        red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            state.red_activity_this_step[target_host] | success
-        ),
         last_red_action_success=success,
     )
 
@@ -714,9 +712,6 @@ def _apply_impact(state: CageState, target_host: int, const: CageConst) -> CageS
 
     return state.replace(
         ot_service_stopped=new_ot_stopped,
-        red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            state.red_activity_this_step[target_host] | success
-        ),
         last_red_action_success=success,
     )
 

@@ -61,6 +61,11 @@ COMPROMISE_NONE = 0
 COMPROMISE_USER = 1
 COMPROMISE_PRIVILEGED = 2
 
+# Activity types (for transient observation encoding)
+ACTIVITY_NONE = 0
+ACTIVITY_SCAN = 1
+ACTIVITY_EXPLOIT = 2
+
 # OS types
 OS_LINUX = 0
 OS_WINDOWS = 1
@@ -113,9 +118,10 @@ class CageState:
     # Unknown observation state - set after Remove, cleared by Monitor/Analyse
     host_observation_unknown: chex.Array  # (max_hosts,) bool: observation should show "Unknown"
 
-    # Red activity this step - tracks hosts where Red took action this step (for Monitor detection)
-    # Cleared at start of each step, set by Red actions. Monitor detects this, not pre-existing state.
-    red_activity_this_step: chex.Array  # (max_hosts,) bool: Red took action on host this step
+    # Red activity this step - tracks activity TYPE on each host for Blue observations
+    # Cleared at start of each step, set by Red actions. Matches CybORG's transient activity detection.
+    # Values: 0=None, 1=Scan (DiscoverNetworkServices), 2=Exploit (ExploitRemoteService)
+    red_activity_this_step: chex.Array  # (max_hosts,) int: activity type this step
 
     # Malware presence - tracks detectable privilege escalation for Blue observations
     # In CybORG, Blue detects Privileged compromise via malware files (Density >= 0.9)
@@ -340,7 +346,7 @@ def create_initial_state(const: CageConst) -> CageState:
         ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
-        red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.int32),
         host_has_malware=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 

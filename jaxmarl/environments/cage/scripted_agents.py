@@ -21,24 +21,23 @@ from jaxmarl.environments.cage.actions import get_red_action_offsets
 # ordering of all hosts in the scenario.
 
 # Jump-back table: on failure at state i, jump to state BLINE_JUMP_BACK[i]
-# FSM has 16 states (0-15) for complete B_lineAgent attack path
+# FSM has 15 states (0-14) matching CybORG's B_lineAgent exactly
 BLINE_JUMP_BACK = jnp.array([
-    0,   # State 0:  DiscoverSubnet(User) -> retry
-    1,   # State 1:  Scan(User1) -> retry
+    0,   # State 0:  DiscoverRemoteSystems(User subnet) -> retry
+    1,   # State 1:  DiscoverNetworkServices(User1) -> retry
     2,   # State 2:  Exploit(User1) -> retry
     2,   # State 3:  PrivEsc(User1) -> back to exploit
-    4,   # State 4:  DiscoverSubnet(Enterprise) -> retry
-    5,   # State 5:  Scan(Enterprise1) -> retry
-    6,   # State 6:  Exploit(Enterprise1) -> retry
-    6,   # State 7:  PrivEsc(Enterprise1) -> back to exploit
-    8,   # State 8:  Scan(Enterprise2) -> retry
-    9,   # State 9:  Exploit(Enterprise2) -> retry
-    9,   # State 10: PrivEsc(Enterprise2) -> back to exploit
-    11,  # State 11: DiscoverSubnet(Operational) -> retry
-    12,  # State 12: Scan(Op_Server0) -> retry
-    13,  # State 13: Exploit(Op_Server0) -> retry
-    13,  # State 14: PrivEsc(Op_Server0) -> back to exploit
-    14,  # State 15: Impact(Op_Server0) -> back to privesc
+    2,   # State 4:  DiscoverNetworkServices(Enterprise1) -> back to User exploit
+    2,   # State 5:  Exploit(Enterprise1) -> back to User exploit
+    5,   # State 6:  PrivEsc(Enterprise1) -> back to Enterprise1 exploit
+    5,   # State 7:  DiscoverRemoteSystems(Enterprise subnet) -> back to Enterprise1 exploit
+    5,   # State 8:  DiscoverNetworkServices(Enterprise2) -> back to Enterprise1 exploit
+    5,   # State 9:  Exploit(Enterprise2) -> back to Enterprise1 exploit
+    9,   # State 10: PrivEsc(Enterprise2) -> back to Enterprise2 exploit
+    9,   # State 11: DiscoverNetworkServices(Op_Server0) -> back to Enterprise2 exploit
+    9,   # State 12: Exploit(Op_Server0) -> back to Enterprise2 exploit
+    12,  # State 13: PrivEsc(Op_Server0) -> back to Op_Server0 exploit
+    13,  # State 14: Impact(Op_Server0) -> back to Op_Server0 privesc
 ])
 
 # Default exploit type for B_lineAgent (SSH brute force = 0)
@@ -68,14 +67,14 @@ def _get_host_first_exploit(host_idx: chex.Array, const: CageConst) -> chex.Arra
     first_exploit = jnp.argmax(exploit_available)
     return first_exploit
 
-# Max FSM state
-BLINE_MAX_STATE = 15
+# Max FSM state (0-14, 15 total states)
+BLINE_MAX_STATE = 14
 
 
 @struct.dataclass
 class BLineState:
     """State for B_lineAgent finite state machine."""
-    fsm_state: chex.Array  # Current FSM state (0-15)
+    fsm_state: chex.Array  # Current FSM state (0-14)
     last_action_success: chex.Array  # Track last action result
     target_user_idx: chex.Array  # Which User host to attack (index into bline_user_hosts)
 
@@ -107,26 +106,25 @@ def bline_get_action(
 ) -> Tuple[chex.Array, BLineState]:
     """Get B_lineAgent action based on FSM state.
 
-    The B_lineAgent follows a deterministic 16-state FSM:
-    - State 0:  DiscoverSubnet(User)
-    - State 1:  ScanHost(User1)
+    The B_lineAgent follows a deterministic 15-state FSM matching CybORG:
+    - State 0:  DiscoverRemoteSystems(User subnet)
+    - State 1:  DiscoverNetworkServices(User1)
     - State 2:  Exploit(User1)
     - State 3:  PrivEsc(User1)
-    - State 4:  DiscoverSubnet(Enterprise)
-    - State 5:  ScanHost(Enterprise1)
-    - State 6:  Exploit(Enterprise1)
-    - State 7:  PrivEsc(Enterprise1)
-    - State 8:  ScanHost(Enterprise2)
+    - State 4:  DiscoverNetworkServices(Enterprise1)
+    - State 5:  Exploit(Enterprise1)
+    - State 6:  PrivEsc(Enterprise1)
+    - State 7:  DiscoverRemoteSystems(Enterprise subnet)
+    - State 8:  DiscoverNetworkServices(Enterprise2)
     - State 9:  Exploit(Enterprise2)
     - State 10: PrivEsc(Enterprise2)
-    - State 11: DiscoverSubnet(Operational)
-    - State 12: ScanHost(Op_Server0)
-    - State 13: Exploit(Op_Server0)
-    - State 14: PrivEsc(Op_Server0)
-    - State 15: Impact(Op_Server0)
+    - State 11: DiscoverNetworkServices(Op_Server0)
+    - State 12: Exploit(Op_Server0)
+    - State 13: PrivEsc(Op_Server0)
+    - State 14: Impact(Op_Server0)
 
     On action failure, jumps back using BLINE_JUMP_BACK table.
-    On success, advances to next state (capped at 15).
+    On success, advances to next state (capped at 14).
 
     Args:
         agent_state: Current B_lineAgent FSM state
@@ -154,14 +152,9 @@ def bline_get_action(
     )
 
     # Get action for the new FSM state (pass agent_state for random user target)
+    # CybORG's B_lineAgent doesn't check action masks - it just tries actions
+    # and they succeed/fail based on game rules
     action = _fsm_state_to_action(new_fsm_state, const, agent_state.target_user_idx)
-
-    # Ensure action is valid (fallback to Sleep=0 if invalid)
-    action = jax.lax.cond(
-        action_mask[action],
-        lambda: action,
-        lambda: jnp.array(0, dtype=jnp.int32),
-    )
 
     new_agent_state = BLineState(
         fsm_state=new_fsm_state,
@@ -179,11 +172,11 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
     - Sleep: 0
     - DiscoverRemoteSystems: 1 + subnet_idx
     - DiscoverNetworkServices: scan_start + host_idx
-    - Exploit: exploit_start + exploit_type * num_hosts + host_idx
+    - Exploit: exploit_start + host_idx * num_exploits + exploit_type
     - PrivilegeEscalate: privesc_start + host_idx
     - Impact: impact_start + host_idx
 
-    16-state FSM for complete B_lineAgent attack path.
+    15-state FSM matching CybORG's B_lineAgent exactly.
     Host and subnet indices are looked up dynamically from const for scenario compatibility.
 
     CybORG's B_lineAgent randomly selects which User host to attack. The target_user_idx
@@ -202,12 +195,11 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
     # Get subnet indices dynamically from host_subnet
     user_subnet = const.host_subnet[user_host]
     enterprise_subnet = const.host_subnet[enterprise1]
-    operational_subnet = const.host_subnet[op_server0]
 
-    def state_0(_):  # DiscoverSubnet(User)
+    def state_0(_):  # DiscoverRemoteSystems(User subnet)
         return discover_start + user_subnet
 
-    def state_1(_):  # ScanHost(User1)
+    def state_1(_):  # DiscoverNetworkServices(User1)
         return scan_start + user_host
 
     def state_2(_):  # Exploit(User1)
@@ -217,20 +209,20 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
     def state_3(_):  # PrivEsc(User1)
         return privesc_start + user_host
 
-    def state_4(_):  # DiscoverSubnet(Enterprise)
-        return discover_start + enterprise_subnet
-
-    def state_5(_):  # ScanHost(Enterprise1)
+    def state_4(_):  # DiscoverNetworkServices(Enterprise1)
         return scan_start + enterprise1
 
-    def state_6(_):  # Exploit(Enterprise1)
+    def state_5(_):  # Exploit(Enterprise1)
         exploit_type = _get_host_first_exploit(enterprise1, const)
         return exploit_start + enterprise1 * const.num_exploits + exploit_type
 
-    def state_7(_):  # PrivEsc(Enterprise1)
+    def state_6(_):  # PrivEsc(Enterprise1)
         return privesc_start + enterprise1
 
-    def state_8(_):  # ScanHost(Enterprise2)
+    def state_7(_):  # DiscoverRemoteSystems(Enterprise subnet)
+        return discover_start + enterprise_subnet
+
+    def state_8(_):  # DiscoverNetworkServices(Enterprise2)
         return scan_start + enterprise2
 
     def state_9(_):  # Exploit(Enterprise2)
@@ -240,27 +232,24 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
     def state_10(_):  # PrivEsc(Enterprise2)
         return privesc_start + enterprise2
 
-    def state_11(_):  # DiscoverSubnet(Operational)
-        return discover_start + operational_subnet
-
-    def state_12(_):  # ScanHost(Op_Server0)
+    def state_11(_):  # DiscoverNetworkServices(Op_Server0)
         return scan_start + op_server0
 
-    def state_13(_):  # Exploit(Op_Server0)
+    def state_12(_):  # Exploit(Op_Server0)
         exploit_type = _get_host_first_exploit(op_server0, const)
         return exploit_start + op_server0 * const.num_exploits + exploit_type
 
-    def state_14(_):  # PrivEsc(Op_Server0)
+    def state_13(_):  # PrivEsc(Op_Server0)
         return privesc_start + op_server0
 
-    def state_15(_):  # Impact(Op_Server0)
+    def state_14(_):  # Impact(Op_Server0)
         return impact_start + op_server0
 
     action = jax.lax.switch(
         fsm_state,
         [state_0, state_1, state_2, state_3, state_4,
          state_5, state_6, state_7, state_8, state_9,
-         state_10, state_11, state_12, state_13, state_14, state_15],
+         state_10, state_11, state_12, state_13, state_14],
         None,
     )
 
@@ -315,7 +304,7 @@ def bline_reset_batched(batch_size: int, key: chex.PRNGKey = None) -> BLineState
 # ============================================================================
 # RedMeanderAgent - Exploratory/Opportunistic Red Agent
 # ============================================================================
-# Unlike B_lineAgent's fixed 16-state FSM, RedMeander explores the network
+# Unlike B_lineAgent's fixed 15-state FSM, RedMeander explores the network
 # opportunistically: scans all discovered hosts, exploits available targets,
 # and escalates privileges where possible. The order of targets is randomized.
 
