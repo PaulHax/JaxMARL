@@ -150,33 +150,19 @@ def run_final_cyborg_eval(checkpoint_path: str, cyborg_path: str, mlflow_module,
 
 
 def log_cyborg_eval_results(cia_results, mlflow_module=None, step=None, prefix="final", verbose=True):
-    """Log CybORG evaluation results to MLflow and optionally print summary.
+    """Log CybORG trajectory artifacts to MLflow and optionally print summary.
 
     Args:
         cia_results: Dict from evaluate_in_cyborg()
         mlflow_module: The mlflow module (pass mlflow directly)
-        step: Step number for MLflow logging
-        prefix: Metric prefix for MLflow ("final" or "eval")
+        step: Step number (unused, kept for API compatibility)
+        prefix: Unused, kept for API compatibility
         verbose: Whether to print detailed results
     """
     if not cia_results:
         return
 
-    if mlflow_module and step is not None:
-        eval_metrics = {
-            f"{prefix}/confidentiality": cia_results["confidentiality"],
-            f"{prefix}/integrity": cia_results["integrity"],
-            f"{prefix}/availability": cia_results["availability"],
-            f"{prefix}/resilience": cia_results["resilience"],
-            f"{prefix}/cyborg_reward": cia_results["reward"],
-        }
-        for name in BLUE_ACTION_NAMES:
-            pct_key = f"pct_{name.lower()}"
-            if pct_key in cia_results:
-                eval_metrics[f"{prefix}/{pct_key}"] = cia_results[pct_key]
-
-        mlflow_module.log_metrics(eval_metrics, step=step)
-
+    if mlflow_module:
         trajectory_dir = cia_results.get("trajectory_dir")
         red_agent = cia_results.get("red_agent", "unknown")
         if trajectory_dir:
