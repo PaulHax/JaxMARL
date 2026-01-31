@@ -310,10 +310,12 @@ class TestObservationPersistence:
         # Count hosts visible in observation (non-zero activity or compromise)
         obs_nonzero = int(jnp.sum(obs['blue'] != 0))
 
-        # Should see multiple compromised hosts, not just one
-        assert obs_nonzero >= 4, (
-            f"Delayed Monitor should reveal multiple compromised hosts. "
-            f"Actual compromised: {num_compromised}, visible in obs: {obs_nonzero // 4} hosts"
+        # Should see compromised hosts minus the hidden initial foothold (User0)
+        # Each visible host has compromised_1=1, so obs_nonzero equals visible host count
+        num_visible = num_compromised - 1  # User0 is hidden
+        assert obs_nonzero >= num_visible, (
+            f"Delayed Monitor should reveal compromised hosts (minus hidden User0). "
+            f"Compromised: {num_compromised}, expected visible: {num_visible}, actual non-zero: {obs_nonzero}"
         )
 
     def test_initial_foothold_hidden(self):

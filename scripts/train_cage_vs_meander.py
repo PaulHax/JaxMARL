@@ -48,6 +48,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jaxmarl.environments.cage import CageEnv
+from utils.metrics import MetricsLogger
 
 CYBORG_AVAILABLE = False
 def setup_cyborg_eval(cyborg_path: str):
@@ -443,7 +444,7 @@ def get_git_commit():
 def setup_experiment(args):
     """Create experiment directory and save config."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    exp_name = f"{timestamp}_blue-vs-meander_seed{args.seed}"
+    exp_name = f"{timestamp}_blue-vs-meander"
     exp_dir = Path(args.experiment_dir) / exp_name
     exp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -529,9 +530,9 @@ python scripts/train_cage_vs_meander.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{Path(__file__).resolve().parent.parent.parent / 'mlflow.db'}"))
     mlflow.set_experiment("cage-training")
-    mlflow.start_run(run_name=exp_name)
+    mlflow.start_run(run_name="blue-vs-meander")
     mlflow.set_tag("codebase", "jaxmarl")
     mlflow.log_params({
         "policy_type": "MlpPolicy",
@@ -556,26 +557,6 @@ python scripts/train_cage_vs_meander.py \\
     })
 
     return exp_dir, config
-
-
-class MetricsLogger:
-    """Logs to both JSONL file and MLflow."""
-
-    def __init__(self, filepath):
-        self.filepath = Path(filepath)
-        self.file = open(self.filepath, "w")
-
-    def log(self, metrics: dict):
-        self.file.write(json.dumps(metrics) + "\n")
-        self.file.flush()
-        if "final" not in metrics:
-            step = metrics.get("steps", metrics.get("update", 0))
-            mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))}, step=step)
-
-    def close(self):
-        self.file.close()
-        mlflow.log_artifact(str(self.filepath))
-        mlflow.end_run()
 
 
 def train(args):
@@ -634,7 +615,6 @@ def train(args):
     total_steps = 0
     last_eval_step = 0
     episode_returns_blue = []
-    episode_lengths_blue = []
     episode_tracker = EpisodeTracker(args.num_envs)
 
     print("\nTraining Blue against RedMeanderAgent...")
@@ -715,31 +695,26 @@ def train(args):
             transitions['reward_blue'], transitions['done']
         )
         episode_returns_blue.extend(completed_returns)
-        episode_lengths_blue.extend(completed_lengths)
 
         if (update + 1) % 10 == 0 or update == 0:
             elapsed = time.perf_counter() - start_time
             sps = total_steps / elapsed
 
             recent_blue = float(jnp.mean(jnp.array(episode_returns_blue[-100:])))
-            recent_len = float(jnp.mean(jnp.array(episode_lengths_blue[-100:]))) if episode_lengths_blue else 0.0
-
             log_dict = {
                 "update": update + 1,
                 "steps": total_steps,
-                "sps": round(sps),
-                "ep_rew_mean": round(recent_blue, 2),
-                "ep_len_mean": round(recent_len, 2),
+                "steps_per_second": round(sps),
+                "episode_reward_mean": round(recent_blue, 2),
                 "loss": round(float(loss_blue), 4),
-                "elapsed_sec": round(elapsed, 1),
             }
 
             if ppo_metrics is not None:
                 log_dict.update({
                     "entropy": round(float(ppo_metrics["entropy"]), 4),
-                    "approx_kl": round(float(ppo_metrics["approx_kl"]), 6),
-                    "explained_var": round(float(ppo_metrics["explained_var"]), 4),
-                    "clip_frac": round(float(ppo_metrics["clip_frac"]), 4),
+                    "kl_divergence": round(float(ppo_metrics["approx_kl"]), 6),
+                    "explained_variance": round(float(ppo_metrics["explained_var"]), 4),
+                    "clip_fraction": round(float(ppo_metrics["clip_frac"]), 4),
                     "policy_loss": round(float(ppo_metrics["policy_loss"]), 4),
                     "value_loss": round(float(ppo_metrics["value_loss"]), 4),
                 })
@@ -749,7 +724,7 @@ def train(args):
             entropy_str = f" | Entropy: {ppo_metrics['entropy']:.3f}" if ppo_metrics else ""
             print(f"Update {update+1}/{num_updates} | "
                   f"Steps: {total_steps:,} | "
-                  f"SPS: {sps:.0f} | "
+                  f"steps/sec: {sps:.0f} | "
                   f"Blue Reward: {recent_blue:.1f}{entropy_str}")
 
         if cyborg_eval_enabled and args.eval_interval > 0:

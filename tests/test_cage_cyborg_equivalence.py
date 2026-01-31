@@ -19,6 +19,7 @@ from jaxmarl.environments.cage.state import (
     HOST_IDS, HOST_NAMES, HOST_SUBNET, SUBNET_IDS, DECOY_IDS,
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
     NUM_DECOY_TYPES, create_scenario2_const,
+    ACTIVITY_NONE, ACTIVITY_SCAN, ACTIVITY_EXPLOIT,
 )
 from jaxmarl.environments.cage.observations import get_blue_obs
 from jaxmarl.environments.cage.actions import (
@@ -243,13 +244,10 @@ class TestObservationEncodingEquivalence:
         assert list(host_obs) == [0, 0, 0, 0], f"Clean host obs: {list(host_obs)}"
 
     def test_scanned_host_encoding(self):
-        """Scanned-only host (no session) should encode as [0, 0, 0, 0].
+        """Host with Scan activity this step should encode as [1, 0, 0, 0].
 
-        CybORG's BlueTableWrapper detects anomalies based on process differences
-        from baseline. Scanning alone doesn't create persistent processes, so
-        scanned hosts without sessions are not visible in the observation.
-
-        Activity is only detected when Red has an active session (shell process).
+        CybORG activity encoding: None=[0,0], Scan=[1,0], Exploit=[1,1]
+        Scan activity shows [1,0] in the first two observation slots.
         """
         env = CageEnv()
         _, state = env.reset(jax.random.PRNGKey(0))
@@ -257,15 +255,20 @@ class TestObservationEncodingEquivalence:
         host_idx = HOST_IDS['Enterprise0']
         state = state.replace(
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
-            red_activity_this_step=state.red_activity_this_step.at[host_idx].set(True),
+            red_activity_this_step=state.red_activity_this_step.at[host_idx].set(ACTIVITY_SCAN),
         )
         obs = get_blue_obs(state, env.const)
 
         host_obs = obs[host_idx * 4:(host_idx + 1) * 4]
-        assert list(host_obs) == [0, 0, 0, 0], f"Scanned host obs: {list(host_obs)}"
+        assert list(host_obs) == [1, 0, 0, 0], f"Scan activity obs: {list(host_obs)}"
 
     def test_exploited_user_encoding(self):
-        """User-compromised host should encode as [1, 1, 0, 1] when detected."""
+        """User-compromised host with Exploit activity should encode as [1, 1, 0, 1].
+
+        CybORG encoding:
+        - activity: Exploit=[1,1]
+        - compromised: User=[0,1] (session visible, no malware detected via Analyse)
+        """
         env = CageEnv()
         _, state = env.reset(jax.random.PRNGKey(0))
 
@@ -274,7 +277,7 @@ class TestObservationEncodingEquivalence:
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
             red_sessions=state.red_sessions.at[host_idx].set(1),
             host_compromised=state.host_compromised.at[host_idx].set(COMPROMISE_USER),
-            host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
+            red_activity_this_step=state.red_activity_this_step.at[host_idx].set(ACTIVITY_EXPLOIT),
         )
         obs = get_blue_obs(state, env.const)
 
@@ -282,12 +285,14 @@ class TestObservationEncodingEquivalence:
         assert list(host_obs) == [1, 1, 0, 1], f"User-compromised host obs: {list(host_obs)}"
 
     def test_exploited_privileged_encoding(self):
-        """Privileged-compromised host with malware should encode as [1, 1, 1, 1].
+        """Privileged-compromised host with malware DETECTED should encode as [1, 1, 1, 1].
 
         CybORG encoding:
-        - activity_0/1 = 1 (persistent session detected)
-        - compromised_0 = 1 (malware detected - indicates privileged)
+        - activity: Exploit=[1,1]
+        - compromised_0 = 1 (malware detected via Analyse - indicates privileged)
         - compromised_1 = 1 (session detected)
+
+        Note: Blue must use Analyse to detect malware; PrivEsc alone doesn't reveal Privileged.
         """
         env = CageEnv()
         _, state = env.reset(jax.random.PRNGKey(0))
@@ -298,7 +303,8 @@ class TestObservationEncodingEquivalence:
             red_sessions=state.red_sessions.at[host_idx].set(1),
             host_compromised=state.host_compromised.at[host_idx].set(COMPROMISE_PRIVILEGED),
             host_has_malware=state.host_has_malware.at[host_idx].set(True),
-            host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
+            host_malware_detected=state.host_malware_detected.at[host_idx].set(True),
+            red_activity_this_step=state.red_activity_this_step.at[host_idx].set(ACTIVITY_EXPLOIT),
         )
         obs = get_blue_obs(state, env.const)
 

@@ -7,4 +7,5 @@ from utils.cyborg_eval import (
     format_cyborg_eval_summary,
     CYBORG_AVAILABLE,
 )
+from utils.metrics import MetricsLogger
 from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES

@@ -33,31 +33,11 @@ from utils.cyborg_eval import (
     evaluate_in_cyborg,
     log_cyborg_eval_results,
 )
+from utils.metrics import MetricsLogger
 from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
 
 import jaxmarl
 from jaxmarl.wrappers.baselines import LogWrapper
-
-
-class MetricsLogger:
-    """Logs to both JSONL file and MLflow."""
-
-    def __init__(self, filepath):
-        self.filepath = Path(filepath)
-        self.file = open(self.filepath, "w")
-
-    def log(self, metrics: dict, step: int = None):
-        self.file.write(json.dumps(metrics) + "\n")
-        self.file.flush()
-        if step is not None:
-            mlflow.log_metrics(
-                {k: float(v) for k, v in metrics.items() if isinstance(v, (int, float, np.floating))},
-                step=step
-            )
-
-    def close(self):
-        self.file.close()
-        mlflow.log_artifact(str(self.filepath))
 
 
 class ActorCritic(nn.Module):
@@ -370,7 +350,8 @@ def main(config):
 
     exp_dir = Path(config.get("EXPERIMENT_DIR", "experiments"))
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    exp_name = f"{timestamp}_ippo_ff_cage_seed{config['SEED']}"
+    red_agent = "meander" if "Meander" in config["ENV_NAME"] else "bline"
+    exp_name = f"{timestamp}_ippo_vs_{red_agent}"
     save_dir = exp_dir / exp_name
     save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -386,9 +367,9 @@ def main(config):
         else:
             print("Warning: CybORG evaluation requested but CybORG not available")
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{Path(__file__).resolve().parent.parent.parent.parent / 'mlflow.db'}"))
     mlflow.set_experiment(config.get("MLFLOW_EXPERIMENT", "cage-training"))
-    mlflow.start_run(run_name=exp_name)
+    mlflow.start_run(run_name=f"ippo-vs-{red_agent}")
 
     mlflow.log_params({
         "algorithm": "IPPO-FF",
@@ -453,7 +434,7 @@ def main(config):
     with open(save_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    metrics_logger = MetricsLogger(save_dir / "metrics.jsonl")
+    metrics_logger = MetricsLogger(save_dir / "metrics.jsonl", end_run_on_close=False)
 
     metrics = out["metrics"]
     num_updates = int(config["NUM_UPDATES"])
@@ -464,15 +445,14 @@ def main(config):
         update_metrics = {
             "update": update_idx + 1,
             "steps": step,
-            "returned_episode_returns": float(metrics["returned_episode_returns"][update_idx].mean()),
-            "returned_episode_lengths": float(metrics["returned_episode_lengths"][update_idx].mean()),
-            "total_loss": float(metrics["total_loss"][update_idx].mean()),
-            "actor_loss": float(metrics["actor_loss"][update_idx].mean()),
-            "critic_loss": float(metrics["critic_loss"][update_idx].mean()),
+            "episode_reward_mean": float(metrics["returned_episode_returns"][update_idx].mean()),
+            "loss": float(metrics["total_loss"][update_idx].mean()),
+            "policy_loss": float(metrics["actor_loss"][update_idx].mean()),
+            "value_loss": float(metrics["critic_loss"][update_idx].mean()),
             "entropy": float(metrics["entropy"][update_idx].mean()),
-            "approx_kl": float(metrics["approx_kl"][update_idx].mean()),
-            "clip_frac": float(metrics["clip_frac"][update_idx].mean()),
-            "explained_var": float(metrics["explained_var"][update_idx].mean()),
+            "kl_divergence": float(metrics["approx_kl"][update_idx].mean()),
+            "clip_fraction": float(metrics["clip_frac"][update_idx].mean()),
+            "explained_variance": float(metrics["explained_var"][update_idx].mean()),
         }
         metrics_logger.log(update_metrics, step=step)
 
@@ -492,12 +472,6 @@ def main(config):
 
     final_return = float(metrics["returned_episode_returns"][-1].mean())
     final_entropy = float(metrics["entropy"][-1].mean())
-    mlflow.log_metrics({
-        "final/episode_return": final_return,
-        "final/entropy": final_entropy,
-        "final/wall_time_sec": elapsed,
-        "final/throughput_sps": sps,
-    }, step=total_steps)
 
     print(f"\nTraining complete!")
     print(f"Wall time: {elapsed:.1f}s")

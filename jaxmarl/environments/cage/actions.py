@@ -11,6 +11,7 @@ from jaxmarl.environments.cage.state import (
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
     ACTIVITY_NONE, ACTIVITY_SCAN, ACTIVITY_EXPLOIT,
     EXPLOIT_IDS, NUM_DECOY_TYPES, OS_LINUX, OS_WINDOWS, DECOY_IDS,
+    HOST_NAMES, SUBNET_IDS,
 )
 from jaxmarl.environments.cage.config import DECOY_OS_RESTRICTIONS, OS_ANY
 
@@ -62,6 +63,19 @@ NUM_EXPLOITS = 8
 # Blue action type names (indexed by action_type from decode_blue_action)
 # Action types: 0=Sleep, 1=Monitor, 2=Analyse, 3=Remove, 4=Restore, 5=Decoy
 BLUE_ACTION_NAMES = ["Sleep", "Monitor", "Analyse", "Remove", "Restore", "Decoy"]
+
+# Red action type names (indexed by action_type from decode_red_action)
+# Action types: 0=Sleep, 1=DiscoverRemoteSystems, 2=DiscoverNetworkServices, 3=Exploit, 4=PrivilegeEscalate, 5=Impact
+RED_ACTION_NAMES = ["Sleep", "DiscoverRemoteSystems", "DiscoverNetworkServices", "ExploitRemoteService", "PrivilegeEscalate", "Impact"]
+
+# Decoy type names (indexed by decoy_type)
+DECOY_NAMES = {v: k for k, v in DECOY_IDS.items()}
+
+# Exploit type names (indexed by exploit_type)
+EXPLOIT_NAMES = {v: k for k, v in EXPLOIT_IDS.items()}
+
+# Subnet names (indexed by subnet_id)
+SUBNET_NAMES = {v: k for k, v in SUBNET_IDS.items()}
 
 # Blue action encoding for default scenario (matching CybORG exactly)
 # CybORG order: Sleep, Monitor, Analyse(13), Remove(13), Decoy(8×13), Restore(13)
@@ -820,3 +834,56 @@ def get_red_action_mask(state: CageState, const: CageConst) -> chex.Array:
     mask = jax.lax.fori_loop(0, const.num_hosts, check_impact, mask)
 
     return mask
+
+
+def decode_blue_action_name(action: int, const: CageConst) -> str:
+    """Convert blue action index to human-readable name like 'Analyse@Enterprise1'.
+
+    This is a Python function for logging/debugging, not for use in JIT-compiled code.
+    """
+    action_type, target_host, decoy_type = decode_blue_action(action, const)
+    action_type = int(action_type)
+    target_host = int(target_host)
+    decoy_type = int(decoy_type)
+
+    type_name = BLUE_ACTION_NAMES[action_type] if action_type < len(BLUE_ACTION_NAMES) else f"Unknown({action_type})"
+
+    if action_type in (0, 1):  # Sleep, Monitor
+        return type_name
+    elif action_type == 5:  # Decoy
+        host_name = HOST_NAMES.get(target_host, f"Host{target_host}")
+        decoy_name = DECOY_NAMES.get(decoy_type, f"Decoy{decoy_type}")
+        return f"{decoy_name}@{host_name}"
+    else:  # Analyse, Remove, Restore
+        host_name = HOST_NAMES.get(target_host, f"Host{target_host}")
+        return f"{type_name}@{host_name}"
+
+
+def decode_red_action_name(action: int, const: CageConst) -> str:
+    """Convert red action index to human-readable name like 'ExploitRemoteService(SSHBruteForce)@User0'.
+
+    This is a Python function for logging/debugging, not for use in JIT-compiled code.
+    """
+    action_type, target_subnet, target_host, exploit_type = decode_red_action(action, const)
+    action_type = int(action_type)
+    target_subnet = int(target_subnet)
+    target_host = int(target_host)
+    exploit_type = int(exploit_type)
+
+    type_name = RED_ACTION_NAMES[action_type] if action_type < len(RED_ACTION_NAMES) else f"Unknown({action_type})"
+
+    if action_type == 0:  # Sleep
+        return type_name
+    elif action_type == 1:  # DiscoverRemoteSystems
+        subnet_name = SUBNET_NAMES.get(target_subnet, f"Subnet{target_subnet}")
+        return f"{type_name}@{subnet_name}"
+    elif action_type == 2:  # DiscoverNetworkServices
+        host_name = HOST_NAMES.get(target_host, f"Host{target_host}")
+        return f"{type_name}@{host_name}"
+    elif action_type == 3:  # Exploit
+        host_name = HOST_NAMES.get(target_host, f"Host{target_host}")
+        exploit_name = EXPLOIT_NAMES.get(exploit_type, f"Exploit{exploit_type}")
+        return f"{type_name}({exploit_name})@{host_name}"
+    else:  # PrivilegeEscalate, Impact
+        host_name = HOST_NAMES.get(target_host, f"Host{target_host}")
+        return f"{type_name}@{host_name}"

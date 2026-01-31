@@ -28,11 +28,12 @@ def setup_cyborg_eval(cyborg_path: str):
 
 
 def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
-                       steps: int = 100, seed: int = 42, track_actions: bool = True):
+                       steps: int = 100, seed: int = 42, track_actions: bool = True,
+                       export_dir: str = None):
     """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
 
     Returns dict with: confidentiality, integrity, availability, resilience, reward,
-    and optionally action distribution percentages.
+    optionally action distribution percentages, and trajectory_dir path.
     """
     if not CYBORG_AVAILABLE:
         return None
@@ -48,13 +49,16 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
     agent = JaxPolicyAgent(checkpoint_path)
     metric = ResilienceMetric()
 
+    if export_dir is None:
+        export_dir = "/tmp/jax_eval"
+
     cage = CAGEExperiment(
         agent,
         red_agent=B_lineAgent,
         scenario="Scenario2",
         seed=seed,
         metric=metric,
-        experiment_export_dir="/tmp/jax_eval",
+        experiment_export_dir=export_dir,
         use_wrapper=True
     )
     agent.set_env = lambda env: None
@@ -84,6 +88,8 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
         verbose=False
     )
 
+    trajectory_dir = Path(export_dir) / "trajectories" / f"{agent}-{B_lineAgent.__name__}"
+
     result_dict = {
         "confidentiality": results[0],
         "integrity": results[1],
@@ -95,6 +101,7 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
         "availability_std": results[7],
         "resilience_std": results[8],
         "reward_std": results[9],
+        "trajectory_dir": str(trajectory_dir),
     }
 
     if track_actions and total_actions > 0:
@@ -131,6 +138,34 @@ def log_cyborg_eval_results(cia_results, mlflow_module=None, step=None, prefix="
                 eval_metrics[f"{prefix}/{pct_key}"] = cia_results[pct_key]
 
         mlflow_module.log_metrics(eval_metrics, step=step)
+
+        trajectory_dir = cia_results.get("trajectory_dir")
+        if trajectory_dir:
+            trajectory_path = Path(trajectory_dir)
+            if trajectory_path.exists():
+                mlflow_module.log_artifacts(str(trajectory_path), artifact_path="trajectories")
+
+                # Create HTML viewer that embeds cynex for each trajectory
+                run_id = mlflow_module.active_run().info.run_id
+                for traj_file in trajectory_path.glob("*.json"):
+                    artifact_url = f"http://localhost:5000/get-artifact?path=trajectories/{traj_file.name}&run_uuid={run_id}"
+                    cynex_url = f"http://localhost:5173?file={artifact_url}"
+                    viewer_html = f'''<!DOCTYPE html>
+<html>
+<head><title>Trajectory Viewer - {traj_file.name}</title></head>
+<body style="margin:0;padding:0;overflow:hidden;">
+<iframe src="{cynex_url}"
+        style="width:100%;height:100vh;border:none;"
+        sandbox="allow-same-origin allow-scripts allow-popups">
+</iframe>
+<p style="position:absolute;bottom:10px;left:10px;font-family:sans-serif;font-size:12px;color:#666;">
+  <a href="{cynex_url}" target="_blank">Open in new tab</a>
+</p>
+</body>
+</html>'''
+                    viewer_path = trajectory_path / f"view_{traj_file.stem}.html"
+                    viewer_path.write_text(viewer_html)
+                    mlflow_module.log_artifact(str(viewer_path), artifact_path="trajectories")
 
     if verbose:
         print(f"  Confidentiality: {cia_results['confidentiality']:.3f} ± {cia_results['confidentiality_std']:.3f}")

@@ -12,7 +12,7 @@ from jaxmarl.environments.cage.state import (
 
 CONFIDENTIALITY_SCALE = 1.0
 AVAILABILITY_SCALE = 1.0
-BLUE_RESTORE_COST = -1.0
+BLUE_RESTORE_COST = -1.0  # CybORG Restore.cost = -1
 
 
 def compute_rewards(
@@ -27,7 +27,7 @@ def compute_rewards(
     - Red only gets confidentiality for PRIVILEGED (root/SYSTEM) sessions
     - Red gets availability only for operational hosts where Impact has stopped OT service
     - Blue reward is negative of Red's (zero-sum base)
-    - Blue pays additional cost for Restore actions
+    - Blue pays additional cost for Restore actions (CybORG Restore.cost = -1)
 
     Returns:
         Dict with 'blue' and 'red' reward scalars.
@@ -47,7 +47,7 @@ def compute_rewards(
     red_reward = confidentiality_reward + availability_reward
     blue_reward = -red_reward
 
-    # Blue action costs
+    # Blue action costs (CybORG Restore.cost = -1)
     from jaxmarl.environments.cage.actions import get_blue_action_offsets, compute_blue_action_space_size
 
     analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)

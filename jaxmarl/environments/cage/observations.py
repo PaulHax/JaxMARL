@@ -87,21 +87,27 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
 
 
 def get_red_obs(state: CageState, const: CageConst) -> chex.Array:
-    """Get Red agent observation.
+    """Get Red agent observation matching CybORG's RedTableWrapper encoding.
+
+    CybORG encoding per host (3 values):
+        - scanned: host has been port scanned
+        - access encoding (2-bit state, mutually exclusive):
+          - None=[0,0], User=[1,0], Privileged=[0,1]
 
     Returns:
         Array of shape (1 + num_hosts * 3,) with:
         - success_flag: whether last action succeeded
-        - Per-host features:
-          - scanned: host has been port scanned
-          - user_access: Red has user-level access
-          - privileged_access: Red has privileged access
+        - Per-host features: [scanned, access_bit0, access_bit1]
     """
     scanned = state.red_scanned_hosts_jax.astype(jnp.float32)
-    user_access = (state.red_privilege >= COMPROMISE_USER).astype(jnp.float32)
-    privileged_access = (state.red_privilege >= COMPROMISE_PRIVILEGED).astype(jnp.float32)
 
-    host_obs = jnp.stack([scanned, user_access, privileged_access], axis=1).flatten()
+    # CybORG uses mutually exclusive access encoding: None=[0,0], User=[1,0], Priv=[0,1]
+    is_user = state.red_privilege == COMPROMISE_USER
+    is_priv = state.red_privilege == COMPROMISE_PRIVILEGED
+    access_bit0 = is_user.astype(jnp.float32)  # 1 only for User (not Priv)
+    access_bit1 = is_priv.astype(jnp.float32)  # 1 only for Priv
+
+    host_obs = jnp.stack([scanned, access_bit0, access_bit1], axis=1).flatten()
     success_flag = state.last_red_action_success.astype(jnp.float32).reshape(1)
 
     return jnp.concatenate([success_flag, host_obs])

@@ -127,7 +127,7 @@ class TestOpServerReward:
 
 class TestActionCosts:
     def test_restore_action_cost(self, const, initial_state):
-        """Restore action incurs cost for Blue."""
+        """Restore action incurs cost for Blue (CybORG Restore.cost = -1)."""
         restore_action = jnp.array(BLUE_RESTORE_START + HOST_IDS['Enterprise0'])
         sleep_action = jnp.array(0)  # Red sleep
 

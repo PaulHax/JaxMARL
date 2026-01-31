@@ -54,8 +54,14 @@ from utils.cyborg_eval import (
     log_cyborg_eval_results,
     format_cyborg_eval_summary,
 )
-from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
-from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, compute_blue_action_space_size
+from utils.metrics import MetricsLogger
+from jaxmarl.environments.cage.actions import (
+    BLUE_ACTION_NAMES,
+    NUM_BLUE_ACTIONS,
+    compute_blue_action_space_size,
+    decode_blue_action_name,
+    decode_red_action_name,
+)
 from jaxmarl.environments.cage.observations import BLUE_OBS_DIM, compute_blue_obs_dim
 from jaxmarl.environments.cage.scripted_agents import (
     BLineState,
@@ -170,11 +176,15 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
         transition = {
             'obs_blue': obs['blue'],
             'action_blue': blue_actions,
+            'action_red': red_actions,
             'reward_blue': rewards['blue'] * reward_scale,
             'done': dones['__all__'],
             'value_blue': blue_values,
             'log_prob_blue': blue_log_probs,
             'avail_blue': avail['blue'],
+            'red_privilege': env_states.red_privilege,
+            'host_has_malware': env_states.host_has_malware,
+            'host_compromised': env_states.host_compromised,
         }
 
         return (key, next_states, next_obs, new_bline_states), transition
@@ -354,6 +364,77 @@ class EpisodeTracker:
         return episode_returns, episode_lengths
 
 
+class TrajectoryRecorder:
+    """Record trajectories for analysis and export to JSON."""
+
+    def __init__(self, num_envs: int, save_dir: Path, save_every_n: int, seed: int, const):
+        self.num_envs = num_envs
+        self.save_dir = save_dir
+        self.save_every_n = save_every_n
+        self.seed = seed
+        self.const = const
+        self.episode_count = 0
+        self.current_steps = [[] for _ in range(num_envs)]
+        self.current_rewards = np.zeros(num_envs)
+
+        if save_every_n > 0:
+            self.save_dir.mkdir(parents=True, exist_ok=True)
+
+    def update(self, transitions, reward_scale: float):
+        """Process transitions and save completed episodes."""
+        if self.save_every_n <= 0:
+            return
+
+        actions_blue = np.asarray(transitions['action_blue'])
+        actions_red = np.asarray(transitions['action_red'])
+        rewards = np.asarray(transitions['reward_blue']) / reward_scale
+        dones = np.asarray(transitions['done'])
+        red_privilege = np.asarray(transitions['red_privilege'])
+        host_has_malware = np.asarray(transitions['host_has_malware'])
+        host_compromised = np.asarray(transitions['host_compromised'])
+
+        num_steps = actions_blue.shape[0]
+
+        for t in range(num_steps):
+            for env_idx in range(self.num_envs):
+                step_data = {
+                    'step': len(self.current_steps[env_idx]),
+                    'blue_action': int(actions_blue[t, env_idx]),
+                    'blue_action_name': decode_blue_action_name(int(actions_blue[t, env_idx]), self.const),
+                    'red_action': int(actions_red[t, env_idx]),
+                    'red_action_name': decode_red_action_name(int(actions_red[t, env_idx]), self.const),
+                    'reward': float(rewards[t, env_idx]),
+                    'hosts_compromised': [i for i, v in enumerate(host_compromised[t, env_idx]) if v > 0],
+                    'hosts_with_malware': [i for i, v in enumerate(host_has_malware[t, env_idx]) if v],
+                    'red_privilege': [int(p) for p in red_privilege[t, env_idx]],
+                }
+                self.current_steps[env_idx].append(step_data)
+                self.current_rewards[env_idx] += float(rewards[t, env_idx])
+
+                if dones[t, env_idx]:
+                    self._save_episode(env_idx)
+                    self.current_steps[env_idx] = []
+                    self.current_rewards[env_idx] = 0.0
+                    self.episode_count += 1
+
+    def _save_episode(self, env_idx: int):
+        """Save completed episode to JSON if it matches save interval."""
+        if self.episode_count % self.save_every_n != 0:
+            return
+
+        episode_data = {
+            'episode': self.episode_count,
+            'seed': self.seed,
+            'total_reward': float(self.current_rewards[env_idx]),
+            'length': len(self.current_steps[env_idx]),
+            'steps': self.current_steps[env_idx],
+        }
+
+        filepath = self.save_dir / f"episode_{self.episode_count}.json"
+        with open(filepath, 'w') as f:
+            json.dump(episode_data, f, indent=2)
+
+
 def get_git_commit():
     """Get current git commit hash, or None if not in a git repo."""
     try:
@@ -369,7 +450,7 @@ def get_git_commit():
 def setup_experiment(args):
     """Create experiment directory and save config."""
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    exp_name = f"{timestamp}_blue-vs-bline_seed{args.seed}"
+    exp_name = f"{timestamp}_blue-vs-bline"
     exp_dir = Path(args.experiment_dir) / exp_name
     exp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -409,6 +490,9 @@ def setup_experiment(args):
             "eval_episodes": args.eval_episodes,
             "cyborg_path": args.cyborg_path,
         },
+        "trajectory": {
+            "save_trajectories": args.save_trajectories,
+        },
     }
 
     with open(exp_dir / "config.json", "w") as f:
@@ -428,6 +512,10 @@ def setup_experiment(args):
   --eval_episodes {args.eval_episodes} \\
   --cyborg_path {args.cyborg_path} \\
 """
+
+    trajectory_args = ""
+    if args.save_trajectories > 0:
+        trajectory_args = f"  --save_trajectories {args.save_trajectories} \\\n"
 
     reproduce_script = f"""#!/bin/bash
 # Reproduce experiment: {exp_name}
@@ -450,14 +538,14 @@ python scripts/train_cage_vs_bline.py \\
   --max_grad_norm {args.max_grad_norm} \\
   --hidden_dim {args.hidden_dim} \\
   --activation {args.activation} \\
-{eval_args}  --experiment_dir {args.experiment_dir}
+{eval_args}{trajectory_args}  --experiment_dir {args.experiment_dir}
 """
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", "file:./mlruns"))
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{Path(__file__).resolve().parent.parent.parent / 'mlflow.db'}"))
     mlflow.set_experiment("cage-training")
-    mlflow.start_run(run_name=exp_name)
+    mlflow.start_run(run_name="blue-vs-bline")
     mlflow.set_tag("codebase", "jaxmarl")
     mlflow.log_params({
         "policy_type": "MlpPolicy",
@@ -479,29 +567,10 @@ python scripts/train_cage_vs_bline.py \\
         "eval_interval": args.eval_interval,
         "eval_episodes": args.eval_episodes,
         "cyborg_path": args.cyborg_path,
+        "save_trajectories": args.save_trajectories,
     })
 
     return exp_dir, config
-
-
-class MetricsLogger:
-    """Logs to both JSONL file and MLflow."""
-
-    def __init__(self, filepath):
-        self.filepath = Path(filepath)
-        self.file = open(self.filepath, "w")
-
-    def log(self, metrics: dict):
-        self.file.write(json.dumps(metrics) + "\n")
-        self.file.flush()
-        if "final" not in metrics:
-            step = metrics.get("steps", metrics.get("update", 0))
-            mlflow.log_metrics({k: v for k, v in metrics.items() if isinstance(v, (int, float))}, step=step)
-
-    def close(self):
-        self.file.close()
-        mlflow.log_artifact(str(self.filepath))
-        mlflow.end_run()
 
 
 def train(args):
@@ -560,8 +629,17 @@ def train(args):
     total_steps = 0
     last_eval_step = 0
     episode_returns_blue = []
-    episode_lengths_blue = []
     episode_tracker = EpisodeTracker(args.num_envs)
+    trajectory_recorder = TrajectoryRecorder(
+        args.num_envs,
+        exp_dir / "trajectories",
+        args.save_trajectories,
+        args.seed,
+        env.const
+    )
+
+    if args.save_trajectories > 0:
+        print(f"Trajectory recording: every {args.save_trajectories} episodes")
 
     print("\nTraining Blue against B_lineAgent...")
     start_time = time.perf_counter()
@@ -643,31 +721,28 @@ def train(args):
             transitions['reward_blue'], transitions['done']
         )
         episode_returns_blue.extend(completed_returns)
-        episode_lengths_blue.extend(completed_lengths)
+
+        trajectory_recorder.update(transitions, args.reward_scale)
 
         if (update + 1) % 10 == 0 or update == 0:
             elapsed = time.perf_counter() - start_time
             sps = total_steps / elapsed
 
             recent_blue = float(jnp.mean(jnp.array(episode_returns_blue[-100:])))
-            recent_len = float(jnp.mean(jnp.array(episode_lengths_blue[-100:]))) if episode_lengths_blue else 0.0
-
             log_dict = {
                 "update": update + 1,
                 "steps": total_steps,
-                "sps": round(sps),
-                "ep_rew_mean": round(recent_blue, 2),
-                "ep_len_mean": round(recent_len, 2),
+                "steps_per_second": round(sps),
+                "episode_reward_mean": round(recent_blue, 2),
                 "loss": round(float(loss_blue), 4),
-                "elapsed_sec": round(elapsed, 1),
             }
 
             if ppo_metrics is not None:
                 log_dict.update({
                     "entropy": round(float(ppo_metrics["entropy"]), 4),
-                    "approx_kl": round(float(ppo_metrics["approx_kl"]), 6),
-                    "explained_var": round(float(ppo_metrics["explained_var"]), 4),
-                    "clip_frac": round(float(ppo_metrics["clip_frac"]), 4),
+                    "kl_divergence": round(float(ppo_metrics["approx_kl"]), 6),
+                    "explained_variance": round(float(ppo_metrics["explained_var"]), 4),
+                    "clip_fraction": round(float(ppo_metrics["clip_frac"]), 4),
                     "policy_loss": round(float(ppo_metrics["policy_loss"]), 4),
                     "value_loss": round(float(ppo_metrics["value_loss"]), 4),
                 })
@@ -677,7 +752,7 @@ def train(args):
             entropy_str = f" | Entropy: {ppo_metrics['entropy']:.3f}" if ppo_metrics else ""
             print(f"Update {update+1}/{num_updates} | "
                   f"Steps: {total_steps:,} | "
-                  f"SPS: {sps:.0f} | "
+                  f"steps/sec: {sps:.0f} | "
                   f"Blue Reward: {recent_blue:.1f}{entropy_str}")
 
         if cyborg_eval_enabled and args.eval_interval > 0:
@@ -791,6 +866,8 @@ def main():
     parser.add_argument("--cyborg_path", type=str,
                         default="/home/paulhax/src/cyber/cage-challenge-2/CybORG",
                         help="Path to CybORG installation for CIA evaluation")
+    parser.add_argument("--save_trajectories", type=int, default=0,
+                        help="Save every Nth episode trajectory to JSON (0 = disabled)")
     args = parser.parse_args()
 
     train(args)

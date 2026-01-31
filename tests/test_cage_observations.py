@@ -7,6 +7,7 @@ import pytest
 from jaxmarl.environments.cage.state import (
     create_scenario2_const, create_initial_state, create_initial_state_with_red_foothold,
     HOST_IDS, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
+    ACTIVITY_SCAN, ACTIVITY_EXPLOIT,
 )
 from jaxmarl.environments.cage.observations import (
     get_blue_obs, get_red_obs, get_obs,
@@ -58,57 +59,69 @@ class TestBlueObservation:
         """Compromised host with Red session should be visible in blue observation.
 
         CybORG encoding: [activity_0, activity_1, compromised_0, compromised_1]
-        For PRIVILEGED compromise with session and malware:
-        - activity_0 = 1 (Red has session)
-        - activity_1 = 1 (Red has session)
-        - compromised_0 = 1 (malware detected)
+        For compromise with session and malware DETECTED by Blue:
+        - compromised_0 = 1 (malware detected via Analyse)
         - compromised_1 = 1 (session detected)
 
         Note: Initial foothold (User0) is hidden; test Enterprise0 instead.
-        Blue observes "privileged" via malware detection, not actual privilege level.
+        Blue observes "privileged" via malware detection (Analyse), not actual privilege level.
         """
         state = foothold_state.replace(
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
             host_has_malware=foothold_state.host_has_malware.at[HOST_IDS['Enterprise0']].set(True),
+            host_malware_detected=foothold_state.host_malware_detected.at[HOST_IDS['Enterprise0']].set(True),
         )
         obs = get_blue_obs(state, const)
 
         ent0_idx = HOST_IDS['Enterprise0'] * BLUE_OBS_PER_HOST
-        assert obs[ent0_idx + 2] == 1.0  # compromised_0: malware detected
+        assert obs[ent0_idx + 2] == 1.0  # compromised_0: malware detected via Analyse
         assert obs[ent0_idx + 3] == 1.0  # compromised_1: session detected
 
     def test_privileged_access_visible(self, foothold_state, const):
-        """Privileged access with malware should set both compromise flags.
+        """Privileged access with malware DETECTED should set both compromise flags.
 
-        CybORG encoding: compromised_0=1 (malware), compromised_1=1 (session)
-        Blue observes "privileged" via malware detection, not actual privilege level.
+        CybORG encoding: compromised_0=1 (malware detected via Analyse), compromised_1=1 (session)
+        Blue must use Analyse to detect malware; PrivEsc alone doesn't reveal Privileged.
         """
         state = foothold_state.replace(
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
             host_has_malware=foothold_state.host_has_malware.at[HOST_IDS['Enterprise0']].set(True),
+            host_malware_detected=foothold_state.host_malware_detected.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         obs = get_blue_obs(state, const)
 
         ent0_idx = HOST_IDS['Enterprise0'] * BLUE_OBS_PER_HOST
-        assert obs[ent0_idx + 2] == 1.0  # compromised_0: malware detected
+        assert obs[ent0_idx + 2] == 1.0  # compromised_0: malware detected via Analyse
         assert obs[ent0_idx + 3] == 1.0  # compromised_1: session detected
 
     def test_detection_reflects_red_activity(self, foothold_state, const):
-        """Detection features should reflect red activity when detected."""
+        """Activity features reflect red_activity_this_step (TRANSIENT per CybORG).
+
+        CybORG activity is transient: only visible on the step the action occurs.
+        Activity encoding: None=[0,0], Scan=[1,0], Exploit=[1,1]
+        """
+        # Test Scan activity: activity=[1,0]
         state = foothold_state.replace(
-            red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
-            red_scanned_hosts_jax=foothold_state.red_scanned_hosts_jax.at[HOST_IDS['Enterprise0']].set(True),
-            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
+            red_activity_this_step=foothold_state.red_activity_this_step.at[HOST_IDS['Enterprise0']].set(ACTIVITY_SCAN),
         )
 
         obs = get_blue_obs(state, const)
 
         ent0_idx = HOST_IDS['Enterprise0'] * BLUE_OBS_PER_HOST
-        assert obs[ent0_idx + 0] == 1.0  # scan_detected
-        assert obs[ent0_idx + 1] == 1.0  # exploit_detected (session exists)
+        assert obs[ent0_idx + 0] == 1.0  # activity_0: scan or exploit
+        assert obs[ent0_idx + 1] == 0.0  # activity_1: exploit only
+
+        # Test Exploit activity: activity=[1,1]
+        state = foothold_state.replace(
+            red_activity_this_step=foothold_state.red_activity_this_step.at[HOST_IDS['Enterprise0']].set(ACTIVITY_EXPLOIT),
+        )
+
+        obs = get_blue_obs(state, const)
+        assert obs[ent0_idx + 0] == 1.0  # activity_0: scan or exploit
+        assert obs[ent0_idx + 1] == 1.0  # activity_1: exploit
 
 
 class TestRedObservation:
@@ -130,16 +143,20 @@ class TestRedObservation:
         """Red's foothold should be visible in observation.
 
         CybORG starts Red with PRIVILEGED (SYSTEM) access on User0.
+        CybORG encoding is mutually exclusive: None=[0,0], User=[1,0], Priv=[0,1]
         """
         obs = get_red_obs(foothold_state, const)
 
         user0_idx = 1 + HOST_IDS['User0'] * RED_OBS_PER_HOST
         assert obs[user0_idx + 0] == 1.0  # scanned
-        assert obs[user0_idx + 1] == 1.0  # user_access
-        assert obs[user0_idx + 2] == 1.0  # privileged_access (SYSTEM)
+        assert obs[user0_idx + 1] == 0.0  # access_bit0: 0 for Privileged (not User)
+        assert obs[user0_idx + 2] == 1.0  # access_bit1: 1 for Privileged
 
     def test_privileged_access_visible(self, foothold_state, const):
-        """Privileged access should be visible."""
+        """Privileged access should be visible with CybORG's mutually exclusive encoding.
+
+        CybORG encoding: None=[0,0], User=[1,0], Priv=[0,1]
+        """
         state = foothold_state.replace(
             red_privilege=foothold_state.red_privilege.at[HOST_IDS['User0']].set(COMPROMISE_PRIVILEGED)
         )
@@ -147,8 +164,8 @@ class TestRedObservation:
         obs = get_red_obs(state, const)
 
         user0_idx = 1 + HOST_IDS['User0'] * RED_OBS_PER_HOST
-        assert obs[user0_idx + 1] == 1.0  # user_access
-        assert obs[user0_idx + 2] == 1.0  # privileged_access
+        assert obs[user0_idx + 1] == 0.0  # access_bit0: 0 for Privileged
+        assert obs[user0_idx + 2] == 1.0  # access_bit1: 1 for Privileged
 
 
 class TestJITCompilation:
