@@ -49,82 +49,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from jaxmarl.environments.cage import CageEnv
 from utils.metrics import MetricsLogger
-
-CYBORG_AVAILABLE = False
-def setup_cyborg_eval(cyborg_path: str):
-    """Set up CybORG imports for evaluation."""
-    global CYBORG_AVAILABLE
-    cyborg_path = Path(cyborg_path)
-    if cyborg_path.exists():
-        sys.path.insert(0, str(cyborg_path))
-        try:
-            from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
-            from CybORG.Agents.SimpleAgents.BlueMonitorAgent import BlueMonitorAgent
-            from CybORG.Agents import B_lineAgent
-            from cage_experiment import CAGEExperiment
-            from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
-            CYBORG_AVAILABLE = True
-            return True
-        except ImportError as e:
-            print(f"Warning: Could not import CybORG components: {e}")
-            return False
-    return False
-
-
-def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
-                       steps: int = 100, seed: int = 42, red_agent_class=None):
-    """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
-
-    Returns dict with: confidentiality, integrity, availability, resilience, reward
-    """
-    if not CYBORG_AVAILABLE:
-        return None
-
-    cyborg_dir = Path(cyborg_path)
-    sys.path.insert(0, str(cyborg_dir))
-
-    from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
-    from CybORG.Agents import B_lineAgent
-    from CybORG.Agents.SimpleAgents.Meander import RedMeanderAgent
-    from cage_experiment import CAGEExperiment
-    from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
-
-    agent = JaxPolicyAgent(checkpoint_path)
-    metric = ResilienceMetric()
-
-    if red_agent_class is None:
-        red_agent_class = RedMeanderAgent
-
-    cage = CAGEExperiment(
-        agent,
-        red_agent=red_agent_class,
-        scenario="Scenario2",
-        seed=seed,
-        metric=metric,
-        experiment_export_dir="/tmp/jax_eval",
-        use_wrapper=True
-    )
-    agent.set_env = lambda env: None
-
-    results = cage.run_experiment(
-        episodes=episodes,
-        steps=steps,
-        plot_export_path="eval.png",
-        verbose=False
-    )
-
-    return {
-        "confidentiality": results[0],
-        "integrity": results[1],
-        "availability": results[2],
-        "resilience": results[3],
-        "reward": results[4],
-        "confidentiality_std": results[5],
-        "integrity_std": results[6],
-        "availability_std": results[7],
-        "resilience_std": results[8],
-        "reward_std": results[9],
-    }
+from utils.cyborg_eval import (
+    setup_cyborg_eval,
+    evaluate_in_cyborg,
+    log_cyborg_eval_results,
+    run_final_cyborg_eval,
+)
 from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, compute_blue_action_space_size
 from jaxmarl.environments.cage.observations import BLUE_OBS_DIM, compute_blue_obs_dim
 from jaxmarl.environments.cage.scripted_agents import (
@@ -429,6 +359,20 @@ class EpisodeTracker:
         return episode_returns, episode_lengths
 
 
+def get_git_info(path: Path):
+    """Get git commit and repo root for a path."""
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"], text=True, timeout=5
+        ).strip()
+        commit = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, timeout=5
+        ).strip()
+        return repo_root, commit
+    except Exception:
+        return None, "unknown"
+
+
 def get_git_commit():
     """Get current git commit hash, or None if not in a git repo."""
     try:
@@ -439,6 +383,27 @@ def get_git_commit():
         return result.stdout.strip()[:8] if result.returncode == 0 else None
     except Exception:
         return None
+
+
+def log_reproducibility(save_dir: Path, script_path: Path):
+    """Log reproducibility info as MLflow tags and artifact."""
+    cwd = os.getcwd()
+    script_repo, script_commit = get_git_info(script_path.parent)
+
+    mlflow.set_tag("command", " ".join(sys.argv))
+    mlflow.set_tag("git_commit", script_commit)
+    if script_repo:
+        mlflow.set_tag("git_repo", script_repo)
+
+    reproduce_script = f"""#!/bin/bash
+# Reproduce this training run
+cd {cwd}
+git checkout {script_commit}
+python {" ".join(sys.argv)}
+"""
+    reproduce_path = save_dir / "reproduce.sh"
+    reproduce_path.write_text(reproduce_script)
+    mlflow.log_artifact(str(reproduce_path))
 
 
 def setup_experiment(args):
@@ -530,10 +495,13 @@ python scripts/train_cage_vs_meander.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{Path(__file__).resolve().parent.parent.parent / 'mlflow.db'}"))
+    mlflow_dir = Path(os.environ.get("MLFLOW_DIR", Path.home() / "mlflow-data"))
+    mlflow_dir.mkdir(parents=True, exist_ok=True)
+    mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
     mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name="blue-vs-meander")
     mlflow.set_tag("codebase", "jaxmarl")
+    log_reproducibility(exp_dir, Path(__file__))
     mlflow.log_params({
         "policy_type": "MlpPolicy",
         "seed": args.seed,
@@ -790,28 +758,10 @@ def train(args):
     save_policy(train_state_blue.params, checkpoint_path)
     mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
 
-    if cyborg_eval_enabled:
-        print("\nRunning final CybORG evaluation...")
-        cia_results = evaluate_in_cyborg(
-            str(checkpoint_path), args.cyborg_path,
-            episodes=args.eval_episodes * 2,
-            steps=100, seed=args.seed
-        )
-        if cia_results:
-            mlflow.log_metrics({
-                "final/confidentiality": cia_results["confidentiality"],
-                "final/integrity": cia_results["integrity"],
-                "final/availability": cia_results["availability"],
-                "final/resilience": cia_results["resilience"],
-                "final/cyborg_reward": cia_results["reward"],
-            }, step=total_steps)
-
-            print("\nFinal CybORG Results:")
-            print(f"  Confidentiality: {cia_results['confidentiality']:.3f} ± {cia_results['confidentiality_std']:.3f}")
-            print(f"  Integrity:       {cia_results['integrity']:.3f} ± {cia_results['integrity_std']:.3f}")
-            print(f"  Availability:    {cia_results['availability']:.3f} ± {cia_results['availability_std']:.3f}")
-            print(f"  Resilience:      {cia_results['resilience']:.3f} ± {cia_results['resilience_std']:.3f}")
-            print(f"  CybORG Reward:   {cia_results['reward']:.2f} ± {cia_results['reward_std']:.2f}")
+    run_final_cyborg_eval(
+        str(checkpoint_path), args.cyborg_path, mlflow, total_steps,
+        export_dir=str(exp_dir), episodes=args.eval_episodes, steps=100, seed=args.seed
+    )
 
     return train_state_blue
 

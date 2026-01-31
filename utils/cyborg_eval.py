@@ -29,8 +29,11 @@ def setup_cyborg_eval(cyborg_path: str):
 
 def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
                        steps: int = 100, seed: int = 42, track_actions: bool = True,
-                       export_dir: str = None):
+                       export_dir: str = None, red_agent_name: str = "bline"):
     """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
+
+    Args:
+        red_agent_name: "bline" or "meander"
 
     Returns dict with: confidentiality, integrity, availability, resilience, reward,
     optionally action distribution percentages, and trajectory_dir path.
@@ -43,8 +46,11 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
 
     from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
     from CybORG.Agents import B_lineAgent
+    from CybORG.Agents.SimpleAgents.Meander import RedMeanderAgent
     from cage_experiment import CAGEExperiment
     from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
+
+    red_agent_class = RedMeanderAgent if red_agent_name == "meander" else B_lineAgent
 
     agent = JaxPolicyAgent(checkpoint_path)
     metric = ResilienceMetric()
@@ -54,7 +60,7 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
 
     cage = CAGEExperiment(
         agent,
-        red_agent=B_lineAgent,
+        red_agent=red_agent_class,
         scenario="Scenario2",
         seed=seed,
         metric=metric,
@@ -84,11 +90,11 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
     results = cage.run_experiment(
         episodes=episodes,
         steps=steps,
-        plot_export_path="eval.png",
+        plot_export_path=f"eval_{red_agent_name}.png",
         verbose=False
     )
 
-    trajectory_dir = Path(export_dir) / "trajectories" / f"{agent}-{B_lineAgent.__name__}"
+    trajectory_dir = Path(export_dir) / "trajectories" / f"{agent}-{red_agent_class.__name__}"
 
     result_dict = {
         "confidentiality": results[0],
@@ -102,6 +108,7 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
         "resilience_std": results[8],
         "reward_std": results[9],
         "trajectory_dir": str(trajectory_dir),
+        "red_agent": red_agent_name,
     }
 
     if track_actions and total_actions > 0:
@@ -109,6 +116,37 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
             result_dict[f"pct_{name.lower()}"] = action_counts[name] / total_actions * 100
 
     return result_dict
+
+
+def run_final_cyborg_eval(checkpoint_path: str, cyborg_path: str, mlflow_module,
+                          total_steps: int, export_dir: str, episodes: int = 3,
+                          steps: int = 100, seed: int = 42):
+    """Run CybORG evaluation against both B_line and Meander, log trajectories to MLflow.
+
+    This is the default post-training evaluation that logs trajectory JSONs as artifacts.
+    """
+    if not setup_cyborg_eval(cyborg_path):
+        print("Warning: CybORG not available, skipping final evaluation")
+        return
+
+    print("\n" + "=" * 60)
+    print("Running CybORG evaluation (trajectories will be logged to MLflow)")
+    print("=" * 60)
+
+    for red_agent in ["bline", "meander"]:
+        print(f"\nEvaluating against {red_agent.upper()}...")
+
+        results = evaluate_in_cyborg(
+            checkpoint_path, cyborg_path,
+            episodes=episodes, steps=steps, seed=seed,
+            export_dir=export_dir, red_agent_name=red_agent
+        )
+
+        if results:
+            log_cyborg_eval_results(
+                results, mlflow_module, total_steps,
+                prefix=f"final/{red_agent}", verbose=True
+            )
 
 
 def log_cyborg_eval_results(cia_results, mlflow_module=None, step=None, prefix="final", verbose=True):

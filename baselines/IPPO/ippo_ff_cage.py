@@ -32,12 +32,49 @@ from utils.cyborg_eval import (
     setup_cyborg_eval,
     evaluate_in_cyborg,
     log_cyborg_eval_results,
+    run_final_cyborg_eval,
 )
 from utils.metrics import MetricsLogger
 from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
 
+import subprocess
 import jaxmarl
 from jaxmarl.wrappers.baselines import LogWrapper
+
+
+def get_git_info(path: Path):
+    """Get git commit and repo root for a path."""
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"], text=True, timeout=5
+        ).strip()
+        commit = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, timeout=5
+        ).strip()
+        return repo_root, commit
+    except Exception:
+        return None, "unknown"
+
+
+def log_reproducibility(save_dir: Path, script_path: Path):
+    """Log reproducibility info as MLflow tags and artifact."""
+    cwd = os.getcwd()
+    script_repo, script_commit = get_git_info(script_path.parent)
+
+    mlflow.set_tag("command", " ".join(sys.argv))
+    mlflow.set_tag("git_commit", script_commit)
+    if script_repo:
+        mlflow.set_tag("git_repo", script_repo)
+
+    reproduce_script = f"""#!/bin/bash
+# Reproduce this training run
+cd {cwd}
+git checkout {script_commit}
+python {" ".join(sys.argv)}
+"""
+    reproduce_path = save_dir / "reproduce.sh"
+    reproduce_path.write_text(reproduce_script)
+    mlflow.log_artifact(str(reproduce_path))
 
 
 class ActorCritic(nn.Module):
@@ -367,9 +404,12 @@ def main(config):
         else:
             print("Warning: CybORG evaluation requested but CybORG not available")
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{Path(__file__).resolve().parent.parent.parent.parent / 'mlflow.db'}"))
+    mlflow_dir = Path(os.environ.get("MLFLOW_DIR", Path.home() / "mlflow-data"))
+    mlflow_dir.mkdir(parents=True, exist_ok=True)
+    mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
     mlflow.set_experiment(config.get("MLFLOW_EXPERIMENT", "cage-training"))
     mlflow.start_run(run_name=f"ippo-vs-{red_agent}")
+    log_reproducibility(save_dir, Path(__file__))
 
     mlflow.log_params({
         "algorithm": "IPPO-FF",
@@ -480,19 +520,10 @@ def main(config):
     print(f"Final entropy: {final_entropy:.4f}")
     print(f"Saved to: {save_dir}")
 
-    if cyborg_eval_enabled:
-        print("\nRunning final CybORG evaluation...")
-        eval_start = time.perf_counter()
-        cia_results = evaluate_in_cyborg(
-            str(checkpoint_path), cyborg_path,
-            episodes=eval_episodes * 2,
-            steps=100, seed=config["SEED"]
-        )
-        eval_time = time.perf_counter() - eval_start
-
-        if cia_results:
-            print(f"\nFinal CybORG Results ({eval_time:.1f}s):")
-            log_cyborg_eval_results(cia_results, mlflow, total_steps)
+    run_final_cyborg_eval(
+        str(checkpoint_path), cyborg_path, mlflow, total_steps,
+        export_dir=str(save_dir), episodes=eval_episodes, steps=100, seed=config["SEED"]
+    )
 
     mlflow.end_run()
     print(f"\nView in MLflow: mlflow ui")

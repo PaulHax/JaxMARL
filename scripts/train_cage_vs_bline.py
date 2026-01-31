@@ -53,6 +53,7 @@ from utils.cyborg_eval import (
     evaluate_in_cyborg,
     log_cyborg_eval_results,
     format_cyborg_eval_summary,
+    run_final_cyborg_eval,
 )
 from utils.metrics import MetricsLogger
 from jaxmarl.environments.cage.actions import (
@@ -435,6 +436,20 @@ class TrajectoryRecorder:
             json.dump(episode_data, f, indent=2)
 
 
+def get_git_info(path: Path):
+    """Get git commit and repo root for a path."""
+    try:
+        repo_root = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"], text=True, timeout=5
+        ).strip()
+        commit = subprocess.check_output(
+            ["git", "-C", str(path), "rev-parse", "HEAD"], text=True, timeout=5
+        ).strip()
+        return repo_root, commit
+    except Exception:
+        return None, "unknown"
+
+
 def get_git_commit():
     """Get current git commit hash, or None if not in a git repo."""
     try:
@@ -445,6 +460,27 @@ def get_git_commit():
         return result.stdout.strip()[:8] if result.returncode == 0 else None
     except Exception:
         return None
+
+
+def log_reproducibility(save_dir: Path, script_path: Path):
+    """Log reproducibility info as MLflow tags and artifact."""
+    cwd = os.getcwd()
+    script_repo, script_commit = get_git_info(script_path.parent)
+
+    mlflow.set_tag("command", " ".join(sys.argv))
+    mlflow.set_tag("git_commit", script_commit)
+    if script_repo:
+        mlflow.set_tag("git_repo", script_repo)
+
+    reproduce_script = f"""#!/bin/bash
+# Reproduce this training run
+cd {cwd}
+git checkout {script_commit}
+python {" ".join(sys.argv)}
+"""
+    reproduce_path = save_dir / "reproduce.sh"
+    reproduce_path.write_text(reproduce_script)
+    mlflow.log_artifact(str(reproduce_path))
 
 
 def setup_experiment(args):
@@ -543,10 +579,13 @@ python scripts/train_cage_vs_bline.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI", f"sqlite:///{Path(__file__).resolve().parent.parent.parent / 'mlflow.db'}"))
+    mlflow_dir = Path(os.environ.get("MLFLOW_DIR", Path.home() / "mlflow-data"))
+    mlflow_dir.mkdir(parents=True, exist_ok=True)
+    mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
     mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name="blue-vs-bline")
     mlflow.set_tag("codebase", "jaxmarl")
+    log_reproducibility(exp_dir, Path(__file__))
     mlflow.log_params({
         "policy_type": "MlpPolicy",
         "seed": args.seed,
@@ -808,16 +847,10 @@ def train(args):
     save_policy(train_state_blue.params, checkpoint_path)
     mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
 
-    if cyborg_eval_enabled:
-        print("\nRunning final CybORG evaluation...")
-        cia_results = evaluate_in_cyborg(
-            str(checkpoint_path), args.cyborg_path,
-            episodes=args.eval_episodes * 2,
-            steps=100, seed=args.seed
-        )
-        if cia_results:
-            print("\nFinal CybORG Results:")
-            log_cyborg_eval_results(cia_results, mlflow, total_steps)
+    run_final_cyborg_eval(
+        str(checkpoint_path), args.cyborg_path, mlflow, total_steps,
+        export_dir=str(exp_dir), episodes=args.eval_episodes, steps=100, seed=args.seed
+    )
 
     return train_state_blue
 
