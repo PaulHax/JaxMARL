@@ -413,6 +413,7 @@ def main(config):
 
     mlflow.log_params({
         "algorithm": "IPPO-FF",
+        "red_agent": red_agent,
         "seed": config["SEED"],
         "num_envs": config["NUM_ENVS"],
         "num_steps": config["NUM_STEPS"],
