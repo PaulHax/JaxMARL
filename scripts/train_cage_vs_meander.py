@@ -385,25 +385,14 @@ def get_git_commit():
         return None
 
 
-def log_reproducibility(save_dir: Path, script_path: Path):
-    """Log reproducibility info as MLflow tags and artifact."""
-    cwd = os.getcwd()
+def log_reproducibility(script_path: Path):
+    """Log reproducibility info as MLflow tags."""
     script_repo, script_commit = get_git_info(script_path.parent)
 
     mlflow.set_tag("command", " ".join(sys.argv))
     mlflow.set_tag("git_commit", script_commit)
     if script_repo:
         mlflow.set_tag("git_repo", script_repo)
-
-    reproduce_script = f"""#!/bin/bash
-# Reproduce this training run
-cd {cwd}
-git checkout {script_commit}
-python {" ".join(sys.argv)}
-"""
-    reproduce_path = save_dir / "reproduce.sh"
-    reproduce_path.write_text(reproduce_script)
-    mlflow.log_artifact(str(reproduce_path))
 
 
 def setup_experiment(args):
@@ -501,7 +490,7 @@ python scripts/train_cage_vs_meander.py \\
     mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name="blue-vs-meander")
     mlflow.set_tag("codebase", "jaxmarl")
-    log_reproducibility(exp_dir, Path(__file__))
+    log_reproducibility(Path(__file__))
     mlflow.log_params({
         "policy_type": "MlpPolicy",
         "seed": args.seed,
