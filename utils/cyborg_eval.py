@@ -178,15 +178,17 @@ def log_cyborg_eval_results(cia_results, mlflow_module=None, step=None, prefix="
         mlflow_module.log_metrics(eval_metrics, step=step)
 
         trajectory_dir = cia_results.get("trajectory_dir")
+        red_agent = cia_results.get("red_agent", "unknown")
         if trajectory_dir:
             trajectory_path = Path(trajectory_dir)
             if trajectory_path.exists():
-                mlflow_module.log_artifacts(str(trajectory_path), artifact_path="trajectories")
+                artifact_subpath = f"trajectories/{red_agent}"
+                mlflow_module.log_artifacts(str(trajectory_path), artifact_path=artifact_subpath)
 
                 # Create HTML viewer that embeds cynex for each trajectory
                 run_id = mlflow_module.active_run().info.run_id
                 for traj_file in trajectory_path.glob("*.json"):
-                    artifact_url = f"http://localhost:5000/get-artifact?path=trajectories/{traj_file.name}&run_uuid={run_id}"
+                    artifact_url = f"http://localhost:5000/get-artifact?path={artifact_subpath}/{traj_file.name}&run_uuid={run_id}"
                     cynex_url = f"http://localhost:5173?file={artifact_url}"
                     viewer_html = f'''<!DOCTYPE html>
 <html>
@@ -203,7 +205,7 @@ def log_cyborg_eval_results(cia_results, mlflow_module=None, step=None, prefix="
 </html>'''
                     viewer_path = trajectory_path / f"view_{traj_file.stem}.html"
                     viewer_path.write_text(viewer_html)
-                    mlflow_module.log_artifact(str(viewer_path), artifact_path="trajectories")
+                    mlflow_module.log_artifact(str(viewer_path), artifact_path=artifact_subpath)
 
     if verbose:
         print(f"  Confidentiality: {cia_results['confidentiality']:.3f} ± {cia_results['confidentiality_std']:.3f}")
