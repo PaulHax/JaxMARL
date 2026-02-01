@@ -562,7 +562,8 @@ class TestCybORGDifferential:
         from jaxmarl.environments.cage.actions import (
             apply_red_action, RED_EXPLOIT_START,
         )
-        from jaxmarl.environments.cage.state import EXPLOIT_IDS, NUM_HOSTS, COMPROMISE_USER
+        from jaxmarl.environments.cage.state import EXPLOIT_IDS, COMPROMISE_USER
+        from jaxmarl.environments.cage.actions import NUM_EXPLOITS
 
         harness.reset()
 
@@ -589,7 +590,7 @@ class TestCybORGDifferential:
                 red_scanned_hosts_jax=harness.jax_state.red_scanned_hosts_jax.at[host_idx].set(True),
             )
 
-            action_idx = RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+            action_idx = RED_EXPLOIT_START + host_idx * NUM_EXPLOITS + exploit_idx
             key = jax.random.PRNGKey(42)
             new_state = apply_red_action(harness.jax_state, action_idx, harness.jax_env.const, key)
 
