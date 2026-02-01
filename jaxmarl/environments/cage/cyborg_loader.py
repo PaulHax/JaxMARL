@@ -5,10 +5,8 @@ and convert them to JaxMARL's ScenarioConfig format. This ensures JaxMARL
 stays in sync with CybORG's scenario definitions without manual duplication.
 """
 
-import os
-from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import List
 import yaml
 
 from jaxmarl.environments.cage.config import (
@@ -16,7 +14,6 @@ from jaxmarl.environments.cage.config import (
 )
 
 
-# Port-to-service mapping (port alone is usually sufficient)
 PORT_TO_SERVICE = {
     22: 'ssh',
     21: 'ftp',
@@ -27,18 +24,15 @@ PORT_TO_SERVICE = {
     445: 'smb',
 }
 
-# Port-to-service mapping that requires process type confirmation
 PORT_PROCESS_TYPE_TO_SERVICE = {
     (3389, 'rdp'): 'rdp',
 }
 
-# Process name to service mapping (for processes without standard ports)
 PROCESS_NAME_TO_SERVICE = {
     'mysql': 'mysql',
     'tomcat8.exe': 'tomcat',
 }
 
-# Confidentiality value mapping from CybORG strings to numeric values
 CONFIDENTIALITY_MAP = {
     'None': 0.0,
     'Low': 0.1,
@@ -46,28 +40,12 @@ CONFIDENTIALITY_MAP = {
     'High': 10.0,
 }
 
-# Availability value mapping from CybORG strings to numeric values
 AVAILABILITY_MAP = {
     'None': 0.0,
     'Low': 0.1,
     'Medium': 1.0,
     'High': 10.0,
 }
-
-
-def find_cyborg_path() -> Optional[Path]:
-    """Find the CybORG installation path by looking for it relative to common locations."""
-    search_paths = [
-        Path(__file__).parent.parent.parent.parent.parent / 'cage-challenge-2' / 'CybORG' / 'CybORG',
-        Path.home() / 'src' / 'cyber' / 'cage-challenge-2' / 'CybORG' / 'CybORG',
-        Path('/home/paulhax/src/cyber/cage-challenge-2/CybORG/CybORG'),
-    ]
-
-    for path in search_paths:
-        if path.exists() and (path / 'Shared' / 'Scenarios').exists():
-            return path
-
-    return None
 
 
 def load_yaml_file(file_path: Path) -> dict:
@@ -123,39 +101,33 @@ def extract_os_type(system_info: dict) -> str:
     return 'windows' if os_type.upper() == 'WINDOWS' else 'linux'
 
 
-def load_scenario_from_cyborg(
-    scenario_name: str = 'Scenario2',
-    cyborg_path: Optional[Path] = None,
+def load_scenario_from_yaml(
+    scenario_path: Path,
+    images_path: Path,
 ) -> ScenarioConfig:
-    """Load scenario configuration by parsing CybORG YAML files.
+    """Load scenario configuration from YAML files.
 
     Args:
-        scenario_name: Name of the scenario (e.g., 'Scenario2')
-        cyborg_path: Optional path to CybORG installation. If not provided,
-                     attempts to find it automatically.
+        scenario_path: Path to the scenario YAML file.
+        images_path: Path to the images directory containing images.yaml
+                     and host image definitions.
 
     Returns:
-        ScenarioConfig populated from CybORG's YAML files.
+        ScenarioConfig populated from the YAML files.
 
     Raises:
-        FileNotFoundError: If CybORG path or scenario files cannot be found.
+        FileNotFoundError: If scenario or images files cannot be found.
     """
-    if cyborg_path is None:
-        cyborg_path = find_cyborg_path()
-        if cyborg_path is None:
-            raise FileNotFoundError(
-                "Could not find CybORG installation. Please provide cyborg_path."
-            )
+    scenario_path = Path(scenario_path)
+    images_path = Path(images_path)
 
-    scenarios_path = cyborg_path / 'Shared' / 'Scenarios'
-    images_path = scenarios_path / 'images'
+    if not scenario_path.exists():
+        raise FileNotFoundError(f"Scenario file not found: {scenario_path}")
+    if not images_path.exists():
+        raise FileNotFoundError(f"Images directory not found: {images_path}")
 
-    # Load main scenario file
-    scenario_file = scenarios_path / f'{scenario_name}.yaml'
-    if not scenario_file.exists():
-        raise FileNotFoundError(f"Scenario file not found: {scenario_file}")
-
-    scenario_data = load_yaml_file(scenario_file)
+    scenario_data = load_yaml_file(scenario_path)
+    scenario_name = scenario_path.stem
 
     # Load images mapping
     images_yaml = load_yaml_file(images_path / 'images.yaml')
@@ -321,18 +293,3 @@ def load_scenario_from_cyborg(
     )
 
 
-@lru_cache(maxsize=4)
-def get_scenario_from_cyborg(scenario_name: str = 'Scenario2') -> ScenarioConfig:
-    """Get a scenario config, loading from CybORG YAML files.
-
-    This is the main entry point for loading scenarios. It attempts to load
-    from CybORG files and raises an error if CybORG is not available.
-    Results are cached for fast subsequent access.
-
-    Args:
-        scenario_name: Name of the scenario to load
-
-    Returns:
-        ScenarioConfig loaded from CybORG
-    """
-    return load_scenario_from_cyborg(scenario_name)
