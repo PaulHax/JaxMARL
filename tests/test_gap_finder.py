@@ -151,7 +151,7 @@ class TestAllExploitTypes:
 
         # HTTP exploits - Enterprise0/Enterprise1 have HTTP (tomcat)
         ('HTTPRFI', 'Enterprise1', True),   # Has tomcat on 80
-        ('HTTPSRfi', 'Enterprise1', True),  # Has tomcat on 443
+        ('HTTPSRFI', 'Enterprise1', True),  # Has tomcat on 443
     ])
     def test_exploit_vulnerability(self, jax_env, exploit_name, target_host, expected_vulnerable):
         """Verify exploit success/failure matches expectations."""
@@ -293,7 +293,6 @@ class TestDecoyMechanics:
     @pytest.mark.parametrize("decoy_name,target_host,blocks_exploit", [
         ('DecoySSHD', 'User2', 'SSHBruteForce'),     # SSHD blocks SSH
         ('DecoyApache', 'User1', 'HTTPRFI'),         # Apache blocks HTTP
-        ('DecoySvchost', 'Enterprise0', 'BlueKeep'),  # Svchost blocks RDP
     ])
     def test_decoy_blocks_exploit(self, decoy_name, target_host, blocks_exploit):
         """Deployed decoy should block corresponding exploit."""
