@@ -23,7 +23,7 @@ from jaxmarl.environments.cage.actions import (
     BLUE_REMOVE_START, BLUE_RESTORE_START, BLUE_DECOY_START,
     RED_SLEEP, RED_DISCOVER_SUBNET_START, RED_SCAN_HOST_START,
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
-    NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_DECOY_TYPES,
+    NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_DECOY_TYPES, NUM_EXPLOITS,
     apply_blue_action, apply_red_action,
     get_red_action_offsets,
 )
@@ -168,7 +168,7 @@ class TestAllExploitTypes:
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True)
         )
 
-        action_idx = RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+        action_idx = RED_EXPLOIT_START + host_idx * NUM_EXPLOITS + exploit_idx
         new_state = apply_red_action(state, action_idx, env.const, key)
 
         exploited = int(new_state.red_privilege[host_idx]) >= COMPROMISE_USER
@@ -322,7 +322,7 @@ class TestDecoyMechanics:
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True)
         )
 
-        exploit_action = RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+        exploit_action = RED_EXPLOIT_START + host_idx * NUM_EXPLOITS + exploit_idx
         new_state = apply_red_action(state, exploit_action, env.const, key)
 
         # Exploit should fail due to decoy
@@ -454,7 +454,7 @@ class TestEdgeCases:
 
         # Exploit again (should not reduce privilege level)
         exploit_idx = EXPLOIT_IDS['SSHBruteForce']
-        exploit_action = RED_EXPLOIT_START + exploit_idx * NUM_HOSTS + host_idx
+        exploit_action = RED_EXPLOIT_START + host_idx * NUM_EXPLOITS + exploit_idx
         new_state = apply_red_action(state, exploit_action, env.const, key)
 
         priv = int(new_state.red_privilege[host_idx])

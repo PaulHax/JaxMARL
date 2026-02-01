@@ -569,27 +569,22 @@ def _meander_process_result(
             ip_idx = s.last_ip_idx
             new_exploited = s.exploited_ips.at[ip_idx].set(False)
 
-            def is_op_host(host_idx):
-                return (host_idx >= 4) & (host_idx <= 7)
+            is_op_host = const.host_subnet == const.operational_subnet_idx
+            is_ent_host = const.host_subnet == const.enterprise_subnet_idx
 
-            def is_ent_host(host_idx):
-                return (host_idx >= 1) & (host_idx <= 3)
-
-            has_op = jnp.any(s.escalated_hosts & jax.vmap(is_op_host)(jnp.arange(const.num_hosts)))
+            has_op = jnp.any(s.escalated_hosts & is_op_host)
 
             def remove_op_hosts(new_exploited, new_escalated):
-                for i in range(4, 8):
-                    should_remove = s.escalated_hosts[i]
-                    new_escalated = jnp.where(should_remove, new_escalated.at[i].set(False), new_escalated)
-                    new_exploited = jnp.where(should_remove, new_exploited.at[i].set(False), new_exploited)
+                should_remove = s.escalated_hosts & is_op_host
+                new_escalated = jnp.where(should_remove, False, new_escalated)
+                new_exploited = jnp.where(should_remove, False, new_exploited)
                 return new_exploited, new_escalated
 
             def remove_ent_hosts(new_exploited, new_escalated):
-                has_ent = jnp.any(s.escalated_hosts & jax.vmap(is_ent_host)(jnp.arange(const.num_hosts)))
-                for i in range(1, 4):
-                    should_remove = s.escalated_hosts[i] & has_ent
-                    new_escalated = jnp.where(should_remove, new_escalated.at[i].set(False), new_escalated)
-                    new_exploited = jnp.where(should_remove, new_exploited.at[i].set(False), new_exploited)
+                has_ent = jnp.any(s.escalated_hosts & is_ent_host)
+                should_remove = s.escalated_hosts & is_ent_host & has_ent
+                new_escalated = jnp.where(should_remove, False, new_escalated)
+                new_exploited = jnp.where(should_remove, False, new_exploited)
                 return new_exploited, new_escalated
 
             new_escalated = s.escalated_hosts

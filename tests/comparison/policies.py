@@ -13,7 +13,7 @@ from jaxmarl.environments.cage.actions import (
     BLUE_ANALYSE_START, BLUE_DECOY_START, NUM_DECOY_TYPES,
     RED_SLEEP, RED_DISCOVER_SUBNET_START, RED_SCAN_HOST_START,
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
-    NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_HOSTS,
+    NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_HOSTS, NUM_EXPLOITS,
 )
 from tests.differential.state_comparator import StateSnapshot
 
@@ -51,7 +51,7 @@ def meander_policy_factory(seed: int) -> Callable[[StateSnapshot, int], int]:
         elif action_type == 'exploit':
             exploit_type = rng.randint(0, 8)
             host_idx = rng.randint(0, NUM_HOSTS)
-            return RED_EXPLOIT_START + exploit_type * NUM_HOSTS + host_idx
+            return RED_EXPLOIT_START + host_idx * NUM_EXPLOITS + exploit_type
         elif action_type == 'privesc':
             host_idx = rng.randint(0, NUM_HOSTS)
             return RED_PRIVESC_START + host_idx

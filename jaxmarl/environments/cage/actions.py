@@ -649,7 +649,7 @@ def _apply_exploit(
     # FTPDirectoryTraversal(1), HarakaRCE(4), SQLInjection(5), EternalBlue(6), BlueKeep(7) give root
     # Exception: BlueKeep on User2 gives NetworkService (user-level) due to RDP process user
     gives_root = (exploit_type == 1) | (exploit_type == 4) | (exploit_type == 5) | (exploit_type == 6) | (exploit_type == 7)
-    bluekeep_on_user2 = (exploit_type == 7) & (target_host == 10)  # User2 = host index 10
+    bluekeep_on_user2 = (exploit_type == 7) & (target_host == const.user2_host_idx)
     gives_root = gives_root & ~bluekeep_on_user2
 
     target_privilege = jnp.where(gives_root, COMPROMISE_PRIVILEGED, COMPROMISE_USER)

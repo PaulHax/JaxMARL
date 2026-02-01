@@ -10,8 +10,9 @@ from jaxmarl.environments.cage.actions import NUM_BLUE_ACTIONS, NUM_RED_ACTIONS
 
 
 @pytest.fixture
-def env():
-    return CageEnv()
+def env(scenario2_env):
+    """Use session-scoped env to avoid JIT recompilation."""
+    return scenario2_env
 
 
 class TestEnvironmentCreation:

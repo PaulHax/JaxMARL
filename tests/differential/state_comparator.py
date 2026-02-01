@@ -15,6 +15,7 @@ from jaxmarl.environments.cage.state import (
     CageState, CageConst,
 )
 from jaxmarl.environments.cage.observations import get_blue_obs, get_red_obs
+from jaxmarl.environments.cage.config import ScenarioConfig
 
 
 @dataclass
@@ -41,7 +42,7 @@ class StateSnapshot:
     red_scanned_hosts: Dict[str, bool] = field(default_factory=dict)
     host_activity_detected: Dict[str, bool] = field(default_factory=dict)
     ot_service_stopped: Dict[str, bool] = field(default_factory=dict)
-    host_decoys: Dict[str, List[int]] = field(default_factory=dict)  # hostname -> list of decoy type indices
+    host_decoys: Dict[str, List[int]] = field(default_factory=dict)
     blue_obs: Optional[np.ndarray] = None
     red_obs: Optional[np.ndarray] = None
     reward_blue: float = 0.0
@@ -50,33 +51,44 @@ class StateSnapshot:
     time: int = 0
 
 
-# Map CybORG process names (lowercase) to JAX decoy type indices
-# CybORG uses various capitalization (apache2, Smss.exe, etc.) - we compare lowercase
 CYBORG_PROCESS_TO_DECOY_IDX = {
-    'apache2': 0,      # DecoyApache
-    'femitter': 1,     # DecoyFemitter
-    'haraka': 2,       # DecoyHarakaSMPT
-    'smss.exe': 3,     # DecoySmss
-    'sshd.exe': 4,     # DecoySSHD
-    'svchost.exe': 5,  # DecoySvchost
-    'tomcat.exe': 6,   # DecoyTomcat
-    'vsftpd': 7,       # DecoyVsftpd
+    'apache2': 0,
+    'femitter': 1,
+    'haraka': 2,
+    'smss.exe': 3,
+    'sshd.exe': 4,
+    'svchost.exe': 5,
+    'tomcat.exe': 6,
+    'vsftpd': 7,
 }
 
 
-def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
+def get_host_ids(config: Optional[ScenarioConfig] = None) -> Dict[str, int]:
+    """Get host ID mapping from config or use defaults."""
+    if config is not None:
+        return config.host_ids
+    return HOST_IDS
+
+
+def extract_cyborg_state(
+    cyborg_env,
+    config: Optional[ScenarioConfig] = None,
+    include_obs: bool = True,
+) -> StateSnapshot:
     """Extract comprehensive state from CybORG environment.
 
     Args:
         cyborg_env: CybORG environment instance
+        config: Optional ScenarioConfig for host mappings
         include_obs: Whether to include observations
 
     Returns:
         StateSnapshot with all comparable state
     """
     snapshot = StateSnapshot()
+    host_ids = get_host_ids(config)
 
-    for hostname in HOST_IDS.keys():
+    for hostname in host_ids.keys():
         snapshot.host_compromised[hostname] = COMPROMISE_NONE
         snapshot.red_privilege[hostname] = COMPROMISE_NONE
         snapshot.red_sessions[hostname] = 0
@@ -85,23 +97,18 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
         snapshot.host_activity_detected[hostname] = False
         snapshot.ot_service_stopped[hostname] = False
 
-    # Primary source: internal state sessions (most reliable)
-    # CybORG's get_agent_state('Red') only returns partial info
     try:
         state = cyborg_env.environment_controller.state
         red_sessions_dict = state.sessions.get('Red', {})
 
-        # Track which hosts have Red sessions
         hosts_with_sessions = set()
         for sess_id, sess in red_sessions_dict.items():
             hostname = sess.host
-            if hostname in HOST_IDS:
+            if hostname in host_ids:
                 hosts_with_sessions.add(hostname)
-                # Count sessions (avoid double-counting)
                 if snapshot.red_sessions[hostname] == 0:
                     snapshot.red_sessions[hostname] = 1
 
-                # Check privilege level
                 username = sess.username
                 if username in ['root', 'SYSTEM']:
                     snapshot.red_privilege[hostname] = COMPROMISE_PRIVILEGED
@@ -111,9 +118,6 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
                     if snapshot.host_compromised[hostname] < COMPROMISE_USER:
                         snapshot.host_compromised[hostname] = COMPROMISE_USER
 
-        # CybORG doesn't explicitly track discovered/scanned hosts.
-        # We mark hosts with sessions as "discovered" for comparison purposes,
-        # but this won't match JAX's more aggressive discovery tracking.
         for hostname in hosts_with_sessions:
             snapshot.red_discovered_hosts[hostname] = True
             snapshot.red_scanned_hosts[hostname] = True
@@ -121,9 +125,8 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
     except Exception:
         pass
 
-    # Fallback: also check get_agent_state for any additional info
     red_state = cyborg_env.get_agent_state('Red')
-    for hostname in HOST_IDS.keys():
+    for hostname in host_ids.keys():
         if hostname in red_state and isinstance(red_state[hostname], dict):
             host_info = red_state[hostname]
 
@@ -136,10 +139,9 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
     snapshot.reward_blue = rewards.get('Blue', 0.0)
     snapshot.reward_red = rewards.get('Red', 0.0)
 
-    # Extract decoys from host processes
     try:
         state = cyborg_env.environment_controller.state
-        for hostname in HOST_IDS.keys():
+        for hostname in host_ids.keys():
             snapshot.host_decoys[hostname] = []
             if hostname in state.hosts:
                 host = state.hosts[hostname]
@@ -154,14 +156,12 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
     except Exception:
         pass
 
-    # Extract OT service status (Impact action stops OTService on Op_Server0)
     try:
         state = cyborg_env.environment_controller.state
         if 'Op_Server0' in state.hosts:
             host = state.hosts['Op_Server0']
             if hasattr(host, 'services') and 'OTService' in host.services:
                 ot_svc = host.services['OTService']
-                # OTService is stopped when 'active' is False
                 snapshot.ot_service_stopped['Op_Server0'] = not ot_svc.get('active', True)
     except Exception:
         pass
@@ -169,27 +169,31 @@ def extract_cyborg_state(cyborg_env, include_obs: bool = True) -> StateSnapshot:
     if include_obs:
         try:
             blue_obs_dict = cyborg_env.get_observation('Blue')
-            snapshot.blue_obs = _convert_cyborg_blue_obs(blue_obs_dict)
+            snapshot.blue_obs = _convert_cyborg_blue_obs(blue_obs_dict, config)
         except Exception:
             pass
 
         try:
             red_obs_dict = cyborg_env.get_observation('Red')
-            snapshot.red_obs = _convert_cyborg_red_obs(red_obs_dict)
+            snapshot.red_obs = _convert_cyborg_red_obs(red_obs_dict, config)
         except Exception:
             pass
 
     return snapshot
 
 
-def _convert_cyborg_blue_obs(obs_dict: dict) -> Optional[np.ndarray]:
+def _convert_cyborg_blue_obs(
+    obs_dict: dict,
+    config: Optional[ScenarioConfig] = None,
+) -> Optional[np.ndarray]:
     """Convert CybORG blue observation dict to array format."""
     if obs_dict is None:
         return None
 
-    obs = np.zeros(len(HOST_IDS) * 4, dtype=np.float32)
+    host_ids = get_host_ids(config)
+    obs = np.zeros(len(host_ids) * 4, dtype=np.float32)
 
-    for hostname, host_idx in HOST_IDS.items():
+    for hostname, host_idx in host_ids.items():
         if hostname in obs_dict:
             host_data = obs_dict[hostname]
 
@@ -215,17 +219,21 @@ def _convert_cyborg_blue_obs(obs_dict: dict) -> Optional[np.ndarray]:
     return obs
 
 
-def _convert_cyborg_red_obs(obs_dict: dict) -> Optional[np.ndarray]:
+def _convert_cyborg_red_obs(
+    obs_dict: dict,
+    config: Optional[ScenarioConfig] = None,
+) -> Optional[np.ndarray]:
     """Convert CybORG red observation dict to array format."""
     if obs_dict is None:
         return None
 
-    obs = np.zeros(1 + len(HOST_IDS) * 3, dtype=np.float32)
+    host_ids = get_host_ids(config)
+    obs = np.zeros(1 + len(host_ids) * 3, dtype=np.float32)
 
     success = obs_dict.get('success', True)
     obs[0] = 1.0 if success else 0.0
 
-    for hostname, host_idx in HOST_IDS.items():
+    for hostname, host_idx in host_ids.items():
         base_idx = 1 + host_idx * 3
         if hostname in obs_dict:
             host_data = obs_dict[hostname]
@@ -245,20 +253,27 @@ def _convert_cyborg_red_obs(obs_dict: dict) -> Optional[np.ndarray]:
     return obs
 
 
-def extract_jax_state(state: CageState, const: CageConst, include_obs: bool = True) -> StateSnapshot:
+def extract_jax_state(
+    state: CageState,
+    const: CageConst,
+    config: Optional[ScenarioConfig] = None,
+    include_obs: bool = True,
+) -> StateSnapshot:
     """Extract comprehensive state from CAGE-JAX environment.
 
     Args:
         state: CageState instance
         const: CageConst instance
+        config: Optional ScenarioConfig for host mappings
         include_obs: Whether to include observations
 
     Returns:
         StateSnapshot with all comparable state
     """
     snapshot = StateSnapshot()
+    host_ids = get_host_ids(config)
 
-    for hostname, idx in HOST_IDS.items():
+    for hostname, idx in host_ids.items():
         snapshot.host_compromised[hostname] = int(state.host_compromised[idx])
         snapshot.red_privilege[hostname] = int(state.red_privilege[idx])
         snapshot.red_sessions[hostname] = int(state.red_sessions[idx])
@@ -270,9 +285,8 @@ def extract_jax_state(state: CageState, const: CageConst, include_obs: bool = Tr
     snapshot.last_red_action_success = bool(state.last_red_action_success)
     snapshot.time = int(state.time)
 
-    # Extract decoys from JAX state array
     num_decoys = state.host_decoys.shape[1] if len(state.host_decoys.shape) > 1 else 0
-    for hostname, idx in HOST_IDS.items():
+    for hostname, idx in host_ids.items():
         decoy_list = []
         for decoy_type in range(num_decoys):
             if state.host_decoys[idx, decoy_type]:
@@ -294,6 +308,7 @@ def extract_jax_state(state: CageState, const: CageConst, include_obs: bool = Tr
 def compare_states(
     cyborg_state: StateSnapshot,
     jax_state: StateSnapshot,
+    config: Optional[ScenarioConfig] = None,
     check_rewards: bool = True,
     check_obs: bool = False,
     reward_tolerance: float = 0.01,
@@ -303,6 +318,7 @@ def compare_states(
     Args:
         cyborg_state: State snapshot from CybORG
         jax_state: State snapshot from JAX
+        config: Optional ScenarioConfig for host mappings
         check_rewards: Whether to compare rewards
         check_obs: Whether to compare observations
         reward_tolerance: Tolerance for reward comparison
@@ -311,8 +327,9 @@ def compare_states(
         List of StateDiff objects describing differences
     """
     diffs = []
+    host_ids = get_host_ids(config)
 
-    for hostname in HOST_IDS.keys():
+    for hostname in host_ids.keys():
         cyborg_comp = cyborg_state.host_compromised.get(hostname, 0)
         jax_comp = jax_state.host_compromised.get(hostname, 0)
         if cyborg_comp != jax_comp:
@@ -335,7 +352,6 @@ def compare_states(
                 severity='error',
             ))
 
-        # Session presence is critical for game mechanics
         cyborg_sess = cyborg_state.red_sessions.get(hostname, 0)
         jax_sess = jax_state.red_sessions.get(hostname, 0)
         cyborg_has = cyborg_sess > 0
@@ -346,13 +362,9 @@ def compare_states(
                 host=hostname,
                 cyborg_value=cyborg_sess,
                 jax_value=jax_sess,
-                severity='error',  # Sessions affect what actions are valid
+                severity='error',
             ))
 
-        # Discovery/scan tracking: CybORG doesn't explicitly track these.
-        # JAX tracks them for action masking, but CybORG computes validity differently.
-        # We compare them as warnings to document differences, but they don't affect
-        # core game mechanics (rewards, compromise state).
         cyborg_discovered = cyborg_state.red_discovered_hosts.get(hostname, False)
         jax_discovered = jax_state.red_discovered_hosts.get(hostname, False)
         if cyborg_discovered != jax_discovered:
@@ -361,7 +373,7 @@ def compare_states(
                 host=hostname,
                 cyborg_value=cyborg_discovered,
                 jax_value=jax_discovered,
-                severity='warning',  # CybORG doesn't track this explicitly
+                severity='warning',
             ))
 
         cyborg_scanned = cyborg_state.red_scanned_hosts.get(hostname, False)
@@ -372,10 +384,9 @@ def compare_states(
                 host=hostname,
                 cyborg_value=cyborg_scanned,
                 jax_value=jax_scanned,
-                severity='warning',  # CybORG doesn't track this explicitly
+                severity='warning',
             ))
 
-        # Compare decoys
         cyborg_decoys = set(cyborg_state.host_decoys.get(hostname, []))
         jax_decoys = set(jax_state.host_decoys.get(hostname, []))
         if cyborg_decoys != jax_decoys:
@@ -384,10 +395,9 @@ def compare_states(
                 host=hostname,
                 cyborg_value=sorted(cyborg_decoys),
                 jax_value=sorted(jax_decoys),
-                severity='error',  # Decoys affect exploit success
+                severity='error',
             ))
 
-        # Compare activity detected (affects Remove action validity)
         cyborg_activity = cyborg_state.host_activity_detected.get(hostname, False)
         jax_activity = jax_state.host_activity_detected.get(hostname, False)
         if cyborg_activity != jax_activity:
@@ -396,10 +406,9 @@ def compare_states(
                 host=hostname,
                 cyborg_value=cyborg_activity,
                 jax_value=jax_activity,
-                severity='warning',  # Detection tracking differs between implementations
+                severity='warning',
             ))
 
-        # Compare OT service stopped (affects Impact rewards)
         cyborg_ot = cyborg_state.ot_service_stopped.get(hostname, False)
         jax_ot = jax_state.ot_service_stopped.get(hostname, False)
         if cyborg_ot != jax_ot:
@@ -408,7 +417,7 @@ def compare_states(
                 host=hostname,
                 cyborg_value=cyborg_ot,
                 jax_value=jax_ot,
-                severity='error',  # Affects game outcome
+                severity='error',
             ))
 
     if check_rewards:
@@ -459,6 +468,7 @@ def compare_states(
 def states_match(
     cyborg_state: StateSnapshot,
     jax_state: StateSnapshot,
+    config: Optional[ScenarioConfig] = None,
     check_rewards: bool = True,
     check_obs: bool = False,
 ) -> bool:
@@ -467,19 +477,21 @@ def states_match(
     Args:
         cyborg_state: State snapshot from CybORG
         jax_state: State snapshot from JAX
+        config: Optional ScenarioConfig for host mappings
         check_rewards: Whether to compare rewards
         check_obs: Whether to compare observations
 
     Returns:
         True if states match (no error-level differences)
     """
-    diffs = compare_states(cyborg_state, jax_state, check_rewards, check_obs)
+    diffs = compare_states(cyborg_state, jax_state, config, check_rewards, check_obs)
     return not any(d.severity == 'error' for d in diffs)
 
 
 def format_state_comparison(
     cyborg_state: StateSnapshot,
     jax_state: StateSnapshot,
+    config: Optional[ScenarioConfig] = None,
     step: Optional[int] = None,
 ) -> str:
     """Format a comparison of two states for debugging output.
@@ -487,6 +499,7 @@ def format_state_comparison(
     Args:
         cyborg_state: State snapshot from CybORG
         jax_state: State snapshot from JAX
+        config: Optional ScenarioConfig for host mappings
         step: Optional step number
 
     Returns:
@@ -500,17 +513,19 @@ def format_state_comparison(
     lines.append(f"\nRewards: CybORG blue={cyborg_state.reward_blue:.2f}, red={cyborg_state.reward_red:.2f}")
     lines.append(f"         JAX    blue={jax_state.reward_blue:.2f}, red={jax_state.reward_red:.2f}")
 
+    host_ids = get_host_ids(config)
+
     lines.append("\nHost Compromise Status:")
     lines.append(f"{'Host':<15} {'CybORG':>12} {'JAX':>12} {'Match':>8}")
     lines.append("-" * 50)
 
-    for hostname in sorted(HOST_IDS.keys()):
+    for hostname in sorted(host_ids.keys()):
         cyborg_comp = cyborg_state.host_compromised.get(hostname, 0)
         jax_comp = jax_state.host_compromised.get(hostname, 0)
         match = "✓" if cyborg_comp == jax_comp else "✗"
         lines.append(f"{hostname:<15} {cyborg_comp:>12} {jax_comp:>12} {match:>8}")
 
-    diffs = compare_states(cyborg_state, jax_state)
+    diffs = compare_states(cyborg_state, jax_state, config)
     if diffs:
         lines.append(f"\nDifferences ({len(diffs)}):")
         for diff in diffs:

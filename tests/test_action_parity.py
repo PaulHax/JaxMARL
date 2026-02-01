@@ -225,7 +225,8 @@ class TestRedExploitParity:
         ))
 
         cyborg.step('Red', exploit_class(
-            session=0, agent='Red', ip_address=cyborg.get_ip_map()[target_host]
+            session=0, agent='Red', ip_address=cyborg.get_ip_map()[target_host],
+            target_session=0
         ))
         cyborg_obs = cyborg.get_observation('Red')
         cyborg_success = cyborg_obs.get('success', False)
@@ -283,8 +284,8 @@ class TestRedPrivescParity:
         new_jax_state = apply_red_action(jax_state, privesc_action, jax_env.const, key)
         jax_success = bool(new_jax_state.last_red_action_success)
 
-        # Both should fail
-        assert not cyborg_success, f"CybORG: PrivEsc without session should fail on {target_host}"
+        # Both should fail (CybORG returns TrinaryEnum which is truthy, so compare with True)
+        assert cyborg_success != True, f"CybORG: PrivEsc without session should fail on {target_host}"
         assert not jax_success, f"JAX: PrivEsc without session should fail on {target_host}"
 
 
@@ -323,8 +324,8 @@ class TestRedImpactParity:
         new_jax_state = apply_red_action(jax_state, impact_action, jax_env.const, key)
         jax_success = bool(new_jax_state.last_red_action_success)
 
-        # Both should fail
-        assert not cyborg_success, "CybORG: Impact without privileged session should fail"
+        # Both should fail (CybORG returns TrinaryEnum which is truthy, so compare with True)
+        assert cyborg_success != True, "CybORG: Impact without privileged session should fail"
         assert not jax_success, "JAX: Impact without privileged session should fail"
 
 
@@ -384,7 +385,8 @@ class TestRewardParity:
 
         # Exploit
         cyborg.step('Red', SSHBruteForce(
-            session=0, agent='Red', ip_address=cyborg.get_ip_map()[target]
+            session=0, agent='Red', ip_address=cyborg.get_ip_map()[target],
+            target_session=0
         ))
         cyborg_reward = cyborg.get_rewards()['Red']
 
