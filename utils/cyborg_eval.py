@@ -96,6 +96,8 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
 
     trajectory_dir = Path(export_dir) / "trajectories" / f"{agent}-{red_agent_class.__name__}"
 
+    plot_path = Path(export_dir) / f"eval_{red_agent_name}.png"
+
     result_dict = {
         "confidentiality": results[0],
         "integrity": results[1],
@@ -109,6 +111,7 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
         "reward_std": results[9],
         "trajectory_dir": str(trajectory_dir),
         "red_agent": red_agent_name,
+        "plot_path": str(plot_path),
     }
 
     if track_actions and total_actions > 0:
@@ -165,6 +168,13 @@ def log_cyborg_eval_results(cia_results, mlflow_module=None, step=None, prefix="
     if mlflow_module:
         trajectory_dir = cia_results.get("trajectory_dir")
         red_agent = cia_results.get("red_agent", "unknown")
+
+        plot_path = cia_results.get("plot_path")
+        if plot_path:
+            plot_file = Path(plot_path)
+            if plot_file.exists():
+                mlflow_module.log_artifact(str(plot_file), artifact_path="plots")
+
         if trajectory_dir:
             trajectory_path = Path(trajectory_dir)
             if trajectory_path.exists():

@@ -393,9 +393,11 @@ def main(config):
         else:
             print("Warning: CybORG evaluation requested but CybORG not available")
 
-    mlflow_dir = Path(os.environ.get("MLFLOW_DIR", Path.home() / "mlflow-data"))
-    mlflow_dir.mkdir(parents=True, exist_ok=True)
-    mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
+    if not os.environ.get("MLFLOW_TRACKING_URI"):
+        cyber_root = Path(__file__).resolve().parent.parent.parent.parent
+        mlflow_dir = cyber_root / "mlflow"
+        mlflow_dir.mkdir(parents=True, exist_ok=True)
+        mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
     mlflow.set_experiment(config.get("MLFLOW_EXPERIMENT", "cage-training"))
     mlflow.start_run(run_name=f"ippo-vs-{red_agent}")
     log_reproducibility(Path(__file__))

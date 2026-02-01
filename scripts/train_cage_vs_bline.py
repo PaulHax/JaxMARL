@@ -568,9 +568,11 @@ python scripts/train_cage_vs_bline.py \\
     with open(exp_dir / "reproduce.sh", "w") as f:
         f.write(reproduce_script)
 
-    mlflow_dir = Path(os.environ.get("MLFLOW_DIR", Path.home() / "mlflow-data"))
-    mlflow_dir.mkdir(parents=True, exist_ok=True)
-    mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
+    if not os.environ.get("MLFLOW_TRACKING_URI"):
+        cyber_root = Path(__file__).resolve().parent.parent.parent
+        mlflow_dir = cyber_root / "mlflow"
+        mlflow_dir.mkdir(parents=True, exist_ok=True)
+        mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
     mlflow.set_experiment("cage-training")
     mlflow.start_run(run_name="blue-vs-bline")
     mlflow.set_tag("codebase", "jaxmarl")
