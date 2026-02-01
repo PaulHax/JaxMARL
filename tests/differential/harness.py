@@ -20,11 +20,12 @@ from jaxmarl.environments.cage.state import (
 )
 from jaxmarl.environments.cage.actions import (
     BLUE_SLEEP, BLUE_MONITOR, NUM_BLUE_ACTIONS, NUM_RED_ACTIONS,
-    get_red_action_offsets,
+    get_red_action_offsets, get_blue_action_offsets,
 )
 from jaxmarl.environments.cage.scripted_agents import (
     bline_reset, bline_get_action, BLineState,
 )
+from jaxmarl.environments.cage.config import get_scenario, ScenarioConfig
 
 from .action_translator import (
     cyborg_action_to_jax,
@@ -154,18 +155,29 @@ class DifferentialHarness:
         self.jax_key = None
         self.step_count = 0
         self.red_known_ips = {}  # Track IPs Red has discovered
+        self.config = self._load_scenario_config()
+
+    def _load_scenario_config(self) -> ScenarioConfig:
+        """Load scenario configuration for JAX environment."""
+        scenario_name = self.scenario
+        if scenario_name.endswith('.yaml'):
+            scenario_name = scenario_name[:-5]
+        return get_scenario(scenario_name)
 
     def _create_cyborg_env(self):
         """Create CybORG environment."""
         from CybORG import CybORG
-        scenario_path = _get_cyborg_scenario_path(self.scenario)
+        scenario_name = self.scenario
+        if not scenario_name.endswith('.yaml'):
+            scenario_name = scenario_name + '.yaml'
+        scenario_path = _get_cyborg_scenario_path(scenario_name)
         env = CybORG(scenario_file=str(scenario_path), environment='sim')
         env.set_seed(self.seed)
         return env
 
     def _create_jax_env(self) -> CageEnv:
         """Create CAGE-JAX environment."""
-        return CageEnv(max_steps=self.max_steps)
+        return CageEnv(config=self.config, max_steps=self.max_steps)
 
     def reset(self) -> Tuple[StateSnapshot, StateSnapshot]:
         """Reset both environments.
@@ -184,8 +196,8 @@ class DifferentialHarness:
         self.step_count = 0
         self.red_known_ips = {}
 
-        cyborg_state = extract_cyborg_state(self.cyborg_env, include_obs=self.check_obs)
-        jax_state = extract_jax_state(self.jax_state, self.jax_env.const, include_obs=self.check_obs)
+        cyborg_state = extract_cyborg_state(self.cyborg_env, config=self.config, include_obs=self.check_obs)
+        jax_state = extract_jax_state(self.jax_state, self.jax_env.const, config=self.config, include_obs=self.check_obs)
 
         return cyborg_state, jax_state
 
@@ -215,8 +227,8 @@ class DifferentialHarness:
         Returns:
             StepResult with state comparison
         """
-        blue_cyborg = jax_action_to_cyborg(blue_action_jax, self.cyborg_env, 'Blue')
-        red_cyborg = jax_action_to_cyborg(red_action_jax, self.cyborg_env, 'Red', self.red_known_ips)
+        blue_cyborg = jax_action_to_cyborg(blue_action_jax, self.cyborg_env, 'Blue', config=self.config)
+        red_cyborg = jax_action_to_cyborg(red_action_jax, self.cyborg_env, 'Red', self.red_known_ips, config=self.config)
 
         # Step Blue and capture action cost (before Red's step overwrites it)
         self.cyborg_env.step('Blue', blue_cyborg)
@@ -242,12 +254,12 @@ class DifferentialHarness:
 
         self.step_count += 1
 
-        cyborg_state = extract_cyborg_state(self.cyborg_env, include_obs=self.check_obs)
+        cyborg_state = extract_cyborg_state(self.cyborg_env, config=self.config, include_obs=self.check_obs)
         cyborg_state.reward_blue = cyborg_blue_reward
         cyborg_state.reward_red = cyborg_red_reward
 
         jax_state_snapshot = extract_jax_state(
-            self.jax_state, self.jax_env.const, include_obs=self.check_obs
+            self.jax_state, self.jax_env.const, config=self.config, include_obs=self.check_obs
         )
 
         jax_state_snapshot.reward_blue = float(rewards['blue'])
@@ -255,6 +267,7 @@ class DifferentialHarness:
 
         diffs = compare_states(
             cyborg_state, jax_state_snapshot,
+            config=self.config,
             check_rewards=self.check_rewards,
             check_obs=self.check_obs,
         )
@@ -263,8 +276,8 @@ class DifferentialHarness:
             step=self.step_count,
             blue_action_jax=blue_action_jax,
             red_action_jax=red_action_jax,
-            blue_action_desc=describe_jax_blue_action(blue_action_jax),
-            red_action_desc=describe_jax_red_action(red_action_jax),
+            blue_action_desc=describe_jax_blue_action(blue_action_jax, self.config),
+            red_action_desc=describe_jax_red_action(red_action_jax, self.config, self.jax_env.const),
             cyborg_state=cyborg_state,
             jax_state=jax_state_snapshot,
             diffs=diffs,
@@ -345,14 +358,16 @@ class DifferentialHarness:
         """
         if use_jax_bline:
             bline_state = bline_reset()
+            num_hosts = self.config.num_hosts
+            num_red_actions = get_red_action_offsets(num_hosts)[-1]
 
             def red_policy(state: StateSnapshot, step: int) -> int:
                 nonlocal bline_state
 
                 red_obs = jnp.array([1.0 if self.jax_state.last_red_action_success else 0.0])
-                red_obs = jnp.concatenate([red_obs, jnp.zeros(len(HOST_IDS) * 3)])
+                red_obs = jnp.concatenate([red_obs, jnp.zeros(num_hosts * 3)])
 
-                action_mask = jnp.ones(NUM_RED_ACTIONS, dtype=jnp.bool_)
+                action_mask = jnp.ones(num_red_actions, dtype=jnp.bool_)
 
                 key = jax.random.PRNGKey(self.seed + step)
                 action, bline_state = bline_get_action(
@@ -377,7 +392,7 @@ class DifferentialHarness:
                 cyborg_action = cyborg_agent.get_action(obs, action_space)
 
                 red_action_jax = cyborg_action_to_jax(
-                    cyborg_action, self.cyborg_env, 'Red'
+                    cyborg_action, self.cyborg_env, 'Red', config=self.config
                 )
                 return red_action_jax
 
@@ -397,7 +412,7 @@ class DifferentialHarness:
                     action_space = self.cyborg_env.get_action_space('Red')
                     cyborg_red_action = cyborg_agent.get_action(obs, action_space)
 
-                    blue_cyborg = jax_action_to_cyborg(blue_action, self.cyborg_env, 'Blue')
+                    blue_cyborg = jax_action_to_cyborg(blue_action, self.cyborg_env, 'Blue', config=self.config)
 
                     # Step Blue and capture action cost (before Red's step overwrites it)
                     self.cyborg_env.step('Blue', blue_cyborg)
@@ -411,7 +426,7 @@ class DifferentialHarness:
                     cyborg_red_reward = self.cyborg_env.get_rewards()['Red']
 
                     red_action_jax = cyborg_action_to_jax(
-                        cyborg_red_action, self.cyborg_env, 'Red'
+                        cyborg_red_action, self.cyborg_env, 'Red', config=self.config
                     )
 
                     self.jax_key, subkey = jax.random.split(self.jax_key)
@@ -426,19 +441,20 @@ class DifferentialHarness:
                     self.step_count += 1
 
                     cyborg_state_snap = extract_cyborg_state(
-                        self.cyborg_env, include_obs=self.check_obs
+                        self.cyborg_env, config=self.config, include_obs=self.check_obs
                     )
                     cyborg_state_snap.reward_blue = cyborg_blue_reward
                     cyborg_state_snap.reward_red = cyborg_red_reward
 
                     jax_state_snap = extract_jax_state(
-                        self.jax_state, self.jax_env.const, include_obs=self.check_obs
+                        self.jax_state, self.jax_env.const, config=self.config, include_obs=self.check_obs
                     )
                     jax_state_snap.reward_blue = float(rewards['blue'])
                     jax_state_snap.reward_red = float(rewards['red'])
 
                     diffs = compare_states(
                         cyborg_state_snap, jax_state_snap,
+                        config=self.config,
                         check_rewards=self.check_rewards,
                         check_obs=self.check_obs,
                     )
@@ -447,8 +463,8 @@ class DifferentialHarness:
                         step=step + 1,
                         blue_action_jax=blue_action,
                         red_action_jax=red_action_jax,
-                        blue_action_desc=describe_jax_blue_action(blue_action),
-                        red_action_desc=describe_jax_red_action(red_action_jax),
+                        blue_action_desc=describe_jax_blue_action(blue_action, self.config),
+                        red_action_desc=describe_jax_red_action(red_action_jax, self.config, self.jax_env.const),
                         cyborg_state=cyborg_state_snap,
                         jax_state=jax_state_snap,
                         diffs=diffs,
@@ -520,7 +536,7 @@ class DifferentialHarness:
                 action_space = self.cyborg_env.get_action_space('Red')
                 cyborg_red_action = cyborg_agent.get_action(obs, action_space)
 
-                blue_cyborg = jax_action_to_cyborg(blue_action, self.cyborg_env, 'Blue')
+                blue_cyborg = jax_action_to_cyborg(blue_action, self.cyborg_env, 'Blue', config=self.config)
 
                 self.cyborg_env.step('Blue', blue_cyborg)
                 blue_action_cost = blue_cyborg.cost if hasattr(blue_cyborg, 'cost') else 0
@@ -531,7 +547,7 @@ class DifferentialHarness:
                 cyborg_red_reward = self.cyborg_env.get_rewards()['Red']
 
                 red_action_jax = cyborg_action_to_jax(
-                    cyborg_red_action, self.cyborg_env, 'Red'
+                    cyborg_red_action, self.cyborg_env, 'Red', config=self.config
                 )
 
                 self.jax_key, subkey = jax.random.split(self.jax_key)
@@ -546,19 +562,20 @@ class DifferentialHarness:
                 self.step_count += 1
 
                 cyborg_state_snap = extract_cyborg_state(
-                    self.cyborg_env, include_obs=self.check_obs
+                    self.cyborg_env, config=self.config, include_obs=self.check_obs
                 )
                 cyborg_state_snap.reward_blue = cyborg_blue_reward
                 cyborg_state_snap.reward_red = cyborg_red_reward
 
                 jax_state_snap = extract_jax_state(
-                    self.jax_state, self.jax_env.const, include_obs=self.check_obs
+                    self.jax_state, self.jax_env.const, config=self.config, include_obs=self.check_obs
                 )
                 jax_state_snap.reward_blue = float(rewards['blue'])
                 jax_state_snap.reward_red = float(rewards['red'])
 
                 diffs = compare_states(
                     cyborg_state_snap, jax_state_snap,
+                    config=self.config,
                     check_rewards=self.check_rewards,
                     check_obs=self.check_obs,
                 )
@@ -567,8 +584,8 @@ class DifferentialHarness:
                     step=step + 1,
                     blue_action_jax=blue_action,
                     red_action_jax=red_action_jax,
-                    blue_action_desc=describe_jax_blue_action(blue_action),
-                    red_action_desc=describe_jax_red_action(red_action_jax),
+                    blue_action_desc=describe_jax_blue_action(blue_action, self.config),
+                    red_action_desc=describe_jax_red_action(red_action_jax, self.config, self.jax_env.const),
                     cyborg_state=cyborg_state_snap,
                     jax_state=jax_state_snap,
                     diffs=diffs,

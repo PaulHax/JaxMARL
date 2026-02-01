@@ -8,9 +8,15 @@ consistency with the reference implementation. See cyborg_loader.py for details.
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import jax.numpy as jnp
 import chex
+import CybORG
+
+CYBORG_PATH = Path(CybORG.__file__).parent
+CYBORG_SCENARIOS_PATH = CYBORG_PATH / 'Shared' / 'Scenarios'
+CYBORG_IMAGES_PATH = CYBORG_SCENARIOS_PATH / 'images'
 
 # OS type constants
 OS_LINUX = 0
@@ -178,8 +184,11 @@ def create_scenario2_config() -> ScenarioConfig:
     Loads configuration directly from CybORG YAML files to ensure consistency
     with the reference implementation.
     """
-    from jaxmarl.environments.cage.cyborg_loader import get_scenario_from_cyborg
-    return get_scenario_from_cyborg('Scenario2')
+    from jaxmarl.environments.cage.cyborg_loader import load_scenario_from_yaml
+    return load_scenario_from_yaml(
+        CYBORG_SCENARIOS_PATH / 'Scenario2.yaml',
+        CYBORG_IMAGES_PATH,
+    )
 
 
 def create_scalable_config(

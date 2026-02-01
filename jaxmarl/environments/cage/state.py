@@ -173,6 +173,14 @@ class CageConst:
     # user_to_enterprise[i] = Enterprise index for bline_user_hosts[i]
     user_to_enterprise: chex.Array = None  # (num_attackable_users,) int: connected Enterprise indices
 
+    # Subnet indices (for agents that need to identify hosts by subnet)
+    enterprise_subnet_idx: int = 0
+    operational_subnet_idx: int = 1
+    user_subnet_idx: int = 2
+
+    # Special host indices for exploit behavior
+    user2_host_idx: int = 10  # For BlueKeep special case
+
     # Scenario parameters
     max_steps: int = 100
     num_hosts: int = NUM_HOSTS
@@ -286,6 +294,14 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
     enterprise0_idx = host_ids.get('Enterprise0', 1)
     user_to_enterprise = jnp.array([enterprise0_idx] * len(user_host_names), dtype=jnp.int32)
 
+    # Subnet indices for dynamic host identification
+    enterprise_subnet_idx = subnet_ids.get('Enterprise', 0)
+    operational_subnet_idx = subnet_ids.get('Operational', 1)
+    user_subnet_idx = subnet_ids.get('User', 2)
+
+    # Special host index for BlueKeep behavior
+    user2_host_idx = host_ids.get('User2', 10)
+
     return CageConst(
         adjacency=adjacency,
         subnet_adjacency=subnet_adjacency,
@@ -304,6 +320,10 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
         bline_op_server0=bline_op_server0,
         bline_user_hosts=bline_user_hosts,
         user_to_enterprise=user_to_enterprise,
+        enterprise_subnet_idx=enterprise_subnet_idx,
+        operational_subnet_idx=operational_subnet_idx,
+        user_subnet_idx=user_subnet_idx,
+        user2_host_idx=user2_host_idx,
         max_steps=config.max_steps,
         num_hosts=num_hosts,
         num_subnets=num_subnets,

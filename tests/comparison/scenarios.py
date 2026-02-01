@@ -14,9 +14,9 @@ from jaxmarl.environments.cage.actions import (
     BLUE_ANALYSE_START, BLUE_DECOY_START, NUM_DECOY_TYPES,
     NUM_HOSTS, NUM_EXPLOITS,
 )
-from jaxmarl.environments.cage.cyborg_loader import get_scenario_from_cyborg
+from jaxmarl.environments.cage.config import create_scenario2_config
 
-_config = get_scenario_from_cyborg('Scenario2')
+_config = create_scenario2_config()
 _const = build_const_from_config(_config)
 
 SUBNET_USER = int(_const.host_subnet[HOST_IDS['User0']])

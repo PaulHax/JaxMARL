@@ -4,8 +4,7 @@ This module handles the mapping between CybORG's action objects and the
 integer indices used by CAGE-JAX.
 """
 
-from typing import Optional, Type, Union
-import jax.numpy as jnp
+from typing import Dict, Optional, Tuple
 
 from jaxmarl.environments.cage.state import (
     HOST_IDS, HOST_NAMES, SUBNET_IDS,
@@ -18,6 +17,7 @@ from jaxmarl.environments.cage.actions import (
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
     get_blue_action_offsets, get_red_action_offsets,
 )
+from jaxmarl.environments.cage.config import ScenarioConfig
 
 EXPLOIT_CLASS_TO_JAX_IDX = {
     'SSHBruteForce': 0,
@@ -32,34 +32,36 @@ EXPLOIT_CLASS_TO_JAX_IDX = {
 
 JAX_IDX_TO_EXPLOIT_CLASS = {v: k for k, v in EXPLOIT_CLASS_TO_JAX_IDX.items()}
 
-from jaxmarl.environments.cage.cyborg_loader import get_scenario_from_cyborg
-from jaxmarl.environments.cage.state import build_const_from_config
-
-_config = get_scenario_from_cyborg('Scenario2')
-_const = build_const_from_config(_config)
-
-SUBNET_NAME_TO_IDX = {
-    'User': int(_const.host_subnet[HOST_IDS['User0']]),
-    'Enterprise': int(_const.host_subnet[HOST_IDS['Enterprise0']]),
-    'Operational': int(_const.host_subnet[HOST_IDS['Op_Server0']]),
-}
-IDX_TO_SUBNET_NAME = {v: k for k, v in SUBNET_NAME_TO_IDX.items()}
-
-# Map IP ranges to subnet indices (based on Scenario2 layout)
-# User subnet: 10.0.140.x
-# Enterprise subnet: 10.0.57.x
-# Operational subnet: 10.0.12.x
-CIDR_TO_SUBNET_IDX = {
-    '10.0.140': 0,  # User
-    '10.0.57': 1,   # Enterprise
-    '10.0.12': 2,   # Operational
-}
-
 DECOY_NAME_TO_IDX = {
     'DecoyApache': 0, 'DecoyFemitter': 1, 'DecoyHarakaSMPT': 2,
     'DecoySmss': 3, 'DecoySSHD': 4, 'DecoySvchost': 5,
     'DecoyTomcat': 6, 'DecoyVsftpd': 7,
 }
+
+
+def get_host_mappings(config: Optional[ScenarioConfig] = None) -> Tuple[Dict[str, int], Dict[int, str], int]:
+    """Get host ID mappings from config or use defaults.
+
+    Returns:
+        Tuple of (host_ids, host_names, num_hosts)
+    """
+    if config is not None:
+        return config.host_ids, config.host_names, config.num_hosts
+    return HOST_IDS, HOST_NAMES, NUM_HOSTS
+
+
+def get_subnet_mappings(config: Optional[ScenarioConfig] = None, const: Optional[CageConst] = None) -> Tuple[Dict[str, int], Dict[int, str], int]:
+    """Get subnet ID mappings from config or use defaults.
+
+    Returns:
+        Tuple of (subnet_name_to_idx, idx_to_subnet_name, num_subnets)
+    """
+    if config is not None:
+        subnet_name_to_idx = config.subnet_ids
+        idx_to_subnet_name = {v: k for k, v in subnet_name_to_idx.items()}
+        return subnet_name_to_idx, idx_to_subnet_name, config.num_subnets
+
+    return SUBNET_IDS, {v: k for k, v in SUBNET_IDS.items()}, len(SUBNET_IDS)
 
 
 def _find_session_on_host(cyborg_env, hostname: str) -> int:
@@ -100,17 +102,24 @@ def get_exploit_class_from_action(action) -> Optional[str]:
     return None
 
 
-def cyborg_blue_action_to_jax(action, cyborg_env, const: Optional[CageConst] = None) -> int:
+def cyborg_blue_action_to_jax(
+    action,
+    cyborg_env,
+    const: Optional[CageConst] = None,
+    config: Optional[ScenarioConfig] = None,
+) -> int:
     """Convert CybORG blue action object to JAX action index.
 
     Args:
         action: CybORG action object
         cyborg_env: CybORG environment for IP resolution
         const: Optional CageConst for action offset calculation
+        config: Optional ScenarioConfig for host mappings
 
     Returns:
         JAX action index
     """
+    host_ids, host_names, num_hosts = get_host_mappings(config)
     class_name = type(action).__name__
 
     if class_name == 'Sleep':
@@ -121,29 +130,28 @@ def cyborg_blue_action_to_jax(action, cyborg_env, const: Optional[CageConst] = N
 
     if class_name == 'Analyse':
         hostname = getattr(action, 'hostname', None)
-        if hostname and hostname in HOST_IDS:
-            return BLUE_ANALYSE_START + HOST_IDS[hostname]
+        if hostname and hostname in host_ids:
+            return BLUE_ANALYSE_START + host_ids[hostname]
         return BLUE_SLEEP
 
     if class_name == 'Remove':
         hostname = getattr(action, 'hostname', None)
-        if hostname and hostname in HOST_IDS:
-            return BLUE_REMOVE_START + HOST_IDS[hostname]
+        if hostname and hostname in host_ids:
+            return BLUE_REMOVE_START + host_ids[hostname]
         return BLUE_SLEEP
 
     if class_name == 'Restore':
         hostname = getattr(action, 'hostname', None)
-        if hostname and hostname in HOST_IDS:
-            return BLUE_RESTORE_START + HOST_IDS[hostname]
+        if hostname and hostname in host_ids:
+            return BLUE_RESTORE_START + host_ids[hostname]
         return BLUE_SLEEP
 
     if class_name.startswith('Decoy'):
         hostname = getattr(action, 'hostname', None)
-        if hostname and hostname in HOST_IDS and class_name in DECOY_NAME_TO_IDX:
-            host_idx = HOST_IDS[hostname]
+        if hostname and hostname in host_ids and class_name in DECOY_NAME_TO_IDX:
+            host_idx = host_ids[hostname]
             decoy_type = DECOY_NAME_TO_IDX[class_name]
-            # CybORG encoding: decoy_type * num_hosts + host_idx
-            return BLUE_DECOY_START + decoy_type * NUM_HOSTS + host_idx
+            return BLUE_DECOY_START + decoy_type * num_hosts + host_idx
         return BLUE_SLEEP
 
     return BLUE_SLEEP
@@ -154,6 +162,7 @@ def cyborg_red_action_to_jax(
     cyborg_env,
     const: Optional[CageConst] = None,
     use_sub_action: bool = True,
+    config: Optional[ScenarioConfig] = None,
 ) -> int:
     """Convert CybORG red action object to JAX action index.
 
@@ -162,10 +171,13 @@ def cyborg_red_action_to_jax(
         cyborg_env: CybORG environment for IP resolution
         const: Optional CageConst for action offset calculation
         use_sub_action: If True, use sub_action for ExploitRemoteService
+        config: Optional ScenarioConfig for host mappings
 
     Returns:
         JAX action index
     """
+    host_ids, host_names, num_hosts = get_host_mappings(config)
+    subnet_name_to_idx, idx_to_subnet_name, num_subnets = get_subnet_mappings(config, const)
     class_name = type(action).__name__
 
     if class_name == 'Sleep':
@@ -176,26 +188,22 @@ def cyborg_red_action_to_jax(
         if subnet:
             subnet_str = str(subnet)
 
-            # Extract IP prefix from CIDR (e.g., "10.0.140" from "10.0.140.208/28")
             import re
             cidr_match = re.search(r'(\d+\.\d+\.\d+)\.\d+/\d+', subnet_str)
             if cidr_match:
                 cidr_prefix = cidr_match.group(1)
-                # Find which subnet this IP belongs to by checking host IPs
                 ip_map = cyborg_env.get_ip_map()
                 for hostname, host_ip in ip_map.items():
                     ip_str = str(host_ip)
                     host_prefix = '.'.join(ip_str.split('.')[:3])
-                    if host_prefix == cidr_prefix and hostname in HOST_IDS:
-                        # Found a host in this subnet - determine subnet from hostname
+                    if host_prefix == cidr_prefix and hostname in host_ids:
                         if hostname.startswith('User'):
-                            return RED_DISCOVER_SUBNET_START + SUBNET_NAME_TO_IDX['User']
+                            return RED_DISCOVER_SUBNET_START + subnet_name_to_idx.get('User', 0)
                         elif hostname.startswith('Enterprise') or hostname == 'Defender':
-                            return RED_DISCOVER_SUBNET_START + SUBNET_NAME_TO_IDX['Enterprise']
+                            return RED_DISCOVER_SUBNET_START + subnet_name_to_idx.get('Enterprise', 1)
                         elif hostname.startswith('Op_'):
-                            return RED_DISCOVER_SUBNET_START + SUBNET_NAME_TO_IDX['Operational']
+                            return RED_DISCOVER_SUBNET_START + subnet_name_to_idx.get('Operational', 2)
 
-            # Fall back to name matching
             if hasattr(subnet, 'value'):
                 subnet_name = subnet.value if isinstance(subnet.value, str) else str(subnet)
             else:
@@ -203,9 +211,9 @@ def cyborg_red_action_to_jax(
 
             subnet_name = subnet_name.split('.')[-1].replace("IPv4Network('", '').replace("')", '')
 
-            if subnet_name in SUBNET_NAME_TO_IDX:
-                return RED_DISCOVER_SUBNET_START + SUBNET_NAME_TO_IDX[subnet_name]
-            for name, idx in SUBNET_NAME_TO_IDX.items():
+            if subnet_name in subnet_name_to_idx:
+                return RED_DISCOVER_SUBNET_START + subnet_name_to_idx[subnet_name]
+            for name, idx in subnet_name_to_idx.items():
                 if name.lower() in subnet_name.lower():
                     return RED_DISCOVER_SUBNET_START + idx
         return RED_SLEEP
@@ -215,8 +223,8 @@ def cyborg_red_action_to_jax(
         if ip:
             ip_map = cyborg_env.get_ip_map()
             for hostname, host_ip in ip_map.items():
-                if str(host_ip) == str(ip) and hostname in HOST_IDS:
-                    return RED_SCAN_HOST_START + HOST_IDS[hostname]
+                if str(host_ip) == str(ip) and hostname in host_ids:
+                    return RED_SCAN_HOST_START + host_ids[hostname]
         return RED_SLEEP
 
     if class_name == 'ExploitRemoteService':
@@ -226,8 +234,8 @@ def cyborg_red_action_to_jax(
         if ip:
             ip_map = cyborg_env.get_ip_map()
             for hostname, host_ip in ip_map.items():
-                if str(host_ip) == str(ip) and hostname in HOST_IDS:
-                    host_idx = HOST_IDS[hostname]
+                if str(host_ip) == str(ip) and hostname in host_ids:
+                    host_idx = host_ids[hostname]
                     break
 
         if host_idx is None:
@@ -241,7 +249,6 @@ def cyborg_red_action_to_jax(
 
         if exploit_name in EXPLOIT_CLASS_TO_JAX_IDX:
             exploit_idx = EXPLOIT_CLASS_TO_JAX_IDX[exploit_name]
-            # Exploit encoding: host * num_exploits + exploit_type
             return RED_EXPLOIT_START + host_idx * len(EXPLOIT_CLASS_TO_JAX_IDX) + exploit_idx
 
         return RED_SLEEP
@@ -253,27 +260,26 @@ def cyborg_red_action_to_jax(
         if ip:
             ip_map = cyborg_env.get_ip_map()
             for hostname, host_ip in ip_map.items():
-                if str(host_ip) == str(ip) and hostname in HOST_IDS:
-                    host_idx = HOST_IDS[hostname]
+                if str(host_ip) == str(ip) and hostname in host_ids:
+                    host_idx = host_ids[hostname]
                     break
 
         if host_idx is None:
             return RED_SLEEP
 
         exploit_idx = EXPLOIT_CLASS_TO_JAX_IDX[class_name]
-        # Exploit encoding: host * num_exploits + exploit_type
         return RED_EXPLOIT_START + host_idx * len(EXPLOIT_CLASS_TO_JAX_IDX) + exploit_idx
 
     if class_name == 'PrivilegeEscalate':
         hostname = getattr(action, 'hostname', None)
-        if hostname and hostname in HOST_IDS:
-            return RED_PRIVESC_START + HOST_IDS[hostname]
+        if hostname and hostname in host_ids:
+            return RED_PRIVESC_START + host_ids[hostname]
         return RED_SLEEP
 
     if class_name == 'Impact':
         hostname = getattr(action, 'hostname', None)
-        if hostname and hostname in HOST_IDS:
-            return RED_IMPACT_START + HOST_IDS[hostname]
+        if hostname and hostname in host_ids:
+            return RED_IMPACT_START + host_ids[hostname]
         return RED_SLEEP
 
     return RED_SLEEP
@@ -284,6 +290,7 @@ def cyborg_action_to_jax(
     cyborg_env,
     agent: str,
     const: Optional[CageConst] = None,
+    config: Optional[ScenarioConfig] = None,
 ) -> int:
     """Convert CybORG action to JAX action index.
 
@@ -292,21 +299,27 @@ def cyborg_action_to_jax(
         cyborg_env: CybORG environment for IP resolution
         agent: 'Blue' or 'Red'
         const: Optional CageConst for action offset calculation
+        config: Optional ScenarioConfig for host mappings
 
     Returns:
         JAX action index
     """
     if agent.lower() == 'blue':
-        return cyborg_blue_action_to_jax(action, cyborg_env, const)
-    return cyborg_red_action_to_jax(action, cyborg_env, const)
+        return cyborg_blue_action_to_jax(action, cyborg_env, const, config)
+    return cyborg_red_action_to_jax(action, cyborg_env, const, config=config)
 
 
-def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
+def jax_blue_action_to_cyborg(
+    action_idx: int,
+    cyborg_env,
+    config: Optional[ScenarioConfig] = None,
+):
     """Convert JAX blue action index to CybORG action object.
 
     Args:
         action_idx: JAX action index
         cyborg_env: CybORG environment for action space access
+        config: Optional ScenarioConfig for host mappings
 
     Returns:
         CybORG action object
@@ -322,6 +335,8 @@ def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
         DecoySSHD, DecoySvchost, DecoyTomcat, DecoyVsftpd,
     ]
 
+    host_ids, host_names, num_hosts = get_host_mappings(config)
+
     if action_idx == BLUE_SLEEP:
         return Sleep()
 
@@ -330,24 +345,23 @@ def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
 
     if BLUE_ANALYSE_START <= action_idx < BLUE_REMOVE_START:
         host_idx = action_idx - BLUE_ANALYSE_START
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
         if hostname:
             return Analyse(session=0, agent='Blue', hostname=hostname)
         return Sleep()
 
     if BLUE_REMOVE_START <= action_idx < BLUE_DECOY_START:
         host_idx = action_idx - BLUE_REMOVE_START
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
         if hostname:
             return Remove(session=0, agent='Blue', hostname=hostname)
         return Sleep()
 
     if BLUE_DECOY_START <= action_idx < BLUE_RESTORE_START:
         offset = action_idx - BLUE_DECOY_START
-        # CybORG encoding: decoy_type * num_hosts + host_idx
-        decoy_idx = offset // NUM_HOSTS
-        host_idx = offset % NUM_HOSTS
-        hostname = HOST_NAMES.get(host_idx)
+        decoy_idx = offset // num_hosts
+        host_idx = offset % num_hosts
+        hostname = host_names.get(host_idx)
         if hostname and decoy_idx < len(DECOY_CLASSES):
             decoy_class = DECOY_CLASSES[decoy_idx]
             return decoy_class(session=0, agent='Blue', hostname=hostname)
@@ -355,7 +369,7 @@ def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
 
     if action_idx >= BLUE_RESTORE_START:
         host_idx = action_idx - BLUE_RESTORE_START
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
         if hostname:
             return Restore(session=0, agent='Blue', hostname=hostname)
         return Sleep()
@@ -363,7 +377,12 @@ def jax_blue_action_to_cyborg(action_idx: int, cyborg_env):
     return Sleep()
 
 
-def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None):
+def jax_red_action_to_cyborg(
+    action_idx: int,
+    cyborg_env,
+    known_ips: dict = None,
+    config: Optional[ScenarioConfig] = None,
+):
     """Convert JAX red action index to CybORG action object.
 
     Args:
@@ -372,6 +391,7 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None
         known_ips: Optional dict of hostname -> IP that Red has discovered.
                    If provided, uses these IPs for scan/exploit actions.
                    If None, falls back to get_ip_map().
+        config: Optional ScenarioConfig for host mappings
 
     Returns:
         CybORG action object
@@ -388,19 +408,22 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None
         HarakaRCE, SQLInjection, EternalBlue, BlueKeep,
     ]
 
+    host_ids, host_names, num_hosts = get_host_mappings(config)
+    subnet_name_to_idx, idx_to_subnet_name, num_subnets = get_subnet_mappings(config)
+
     if action_idx == RED_SLEEP:
         return Sleep()
 
     if RED_DISCOVER_SUBNET_START <= action_idx < RED_SCAN_HOST_START:
         subnet_idx = action_idx - RED_DISCOVER_SUBNET_START
-        subnet_name = IDX_TO_SUBNET_NAME.get(subnet_idx, 'User')
+        subnet_name = idx_to_subnet_name.get(subnet_idx, 'User')
         state = cyborg_env.environment_controller.state
         subnet_cidr = state.subnet_name_to_cidr.get(subnet_name)
         return DiscoverRemoteSystems(session=0, agent='Red', subnet=subnet_cidr)
 
     if RED_SCAN_HOST_START <= action_idx < RED_EXPLOIT_START:
         host_idx = action_idx - RED_SCAN_HOST_START
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
         if hostname:
             if known_ips and hostname in known_ips:
                 ip = known_ips[hostname]
@@ -411,11 +434,10 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None
 
     if RED_EXPLOIT_START <= action_idx < RED_PRIVESC_START:
         offset = action_idx - RED_EXPLOIT_START
-        # Encoding: host * num_exploits + exploit_type
         num_exploits = len(EXPLOIT_CLASSES)
         host_idx = offset // num_exploits
         exploit_idx = offset % num_exploits
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
 
         if hostname and exploit_idx < len(EXPLOIT_CLASSES):
             if known_ips and hostname in known_ips:
@@ -428,14 +450,14 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None
 
     if RED_PRIVESC_START <= action_idx < RED_IMPACT_START:
         host_idx = action_idx - RED_PRIVESC_START
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
         if hostname:
             return PrivilegeEscalate(session=0, agent='Red', hostname=hostname)
         return Sleep()
 
     if action_idx >= RED_IMPACT_START:
         host_idx = action_idx - RED_IMPACT_START
-        hostname = HOST_NAMES.get(host_idx)
+        hostname = host_names.get(host_idx)
         if hostname:
             return Impact(session=0, agent='Red', hostname=hostname)
         return Sleep()
@@ -443,7 +465,13 @@ def jax_red_action_to_cyborg(action_idx: int, cyborg_env, known_ips: dict = None
     return Sleep()
 
 
-def jax_action_to_cyborg(action_idx: int, cyborg_env, agent: str, known_ips: dict = None):
+def jax_action_to_cyborg(
+    action_idx: int,
+    cyborg_env,
+    agent: str,
+    known_ips: dict = None,
+    config: Optional[ScenarioConfig] = None,
+):
     """Convert JAX action index to CybORG action object.
 
     Args:
@@ -451,17 +479,23 @@ def jax_action_to_cyborg(action_idx: int, cyborg_env, agent: str, known_ips: dic
         cyborg_env: CybORG environment for action space access
         agent: 'Blue' or 'Red'
         known_ips: Optional dict of hostname -> IP that Red has discovered.
+        config: Optional ScenarioConfig for host mappings
 
     Returns:
         CybORG action object
     """
     if agent.lower() == 'blue':
-        return jax_blue_action_to_cyborg(action_idx, cyborg_env)
-    return jax_red_action_to_cyborg(action_idx, cyborg_env, known_ips)
+        return jax_blue_action_to_cyborg(action_idx, cyborg_env, config)
+    return jax_red_action_to_cyborg(action_idx, cyborg_env, known_ips, config)
 
 
-def describe_jax_blue_action(action_idx: int) -> str:
+def describe_jax_blue_action(
+    action_idx: int,
+    config: Optional[ScenarioConfig] = None,
+) -> str:
     """Get human-readable description of JAX blue action."""
+    host_ids, host_names, num_hosts = get_host_mappings(config)
+
     if action_idx == BLUE_SLEEP:
         return "Sleep"
 
@@ -470,45 +504,51 @@ def describe_jax_blue_action(action_idx: int) -> str:
 
     if BLUE_ANALYSE_START <= action_idx < BLUE_REMOVE_START:
         host_idx = action_idx - BLUE_ANALYSE_START
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         return f"Analyse({hostname})"
 
     if BLUE_REMOVE_START <= action_idx < BLUE_DECOY_START:
         host_idx = action_idx - BLUE_REMOVE_START
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         return f"Remove({hostname})"
 
     if BLUE_DECOY_START <= action_idx < BLUE_RESTORE_START:
         offset = action_idx - BLUE_DECOY_START
-        # CybORG encoding: decoy_type * num_hosts + host_idx
-        decoy_idx = offset // NUM_HOSTS
-        host_idx = offset % NUM_HOSTS
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        decoy_idx = offset // num_hosts
+        host_idx = offset % num_hosts
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         decoy_names = list(DECOY_NAME_TO_IDX.keys())
         decoy_name = decoy_names[decoy_idx] if decoy_idx < len(decoy_names) else f"decoy_{decoy_idx}"
         return f"{decoy_name}({hostname})"
 
     if action_idx >= BLUE_RESTORE_START:
         host_idx = action_idx - BLUE_RESTORE_START
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         return f"Restore({hostname})"
 
     return f"Unknown({action_idx})"
 
 
-def describe_jax_red_action(action_idx: int) -> str:
+def describe_jax_red_action(
+    action_idx: int,
+    config: Optional[ScenarioConfig] = None,
+    const: Optional[CageConst] = None,
+) -> str:
     """Get human-readable description of JAX red action."""
+    host_ids, host_names, num_hosts = get_host_mappings(config)
+    subnet_name_to_idx, idx_to_subnet_name, num_subnets = get_subnet_mappings(config, const)
+
     if action_idx == RED_SLEEP:
         return "Sleep"
 
     if RED_DISCOVER_SUBNET_START <= action_idx < RED_SCAN_HOST_START:
         subnet_idx = action_idx - RED_DISCOVER_SUBNET_START
-        subnet_name = IDX_TO_SUBNET_NAME.get(subnet_idx, f"subnet_{subnet_idx}")
+        subnet_name = idx_to_subnet_name.get(subnet_idx, f"subnet_{subnet_idx}")
         return f"DiscoverSubnet({subnet_name})"
 
     if RED_SCAN_HOST_START <= action_idx < RED_EXPLOIT_START:
         host_idx = action_idx - RED_SCAN_HOST_START
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         return f"Scan({hostname})"
 
     if RED_EXPLOIT_START <= action_idx < RED_PRIVESC_START:
@@ -516,18 +556,18 @@ def describe_jax_red_action(action_idx: int) -> str:
         num_exploits = len(EXPLOIT_CLASS_TO_JAX_IDX)
         host_idx = offset // num_exploits
         exploit_idx = offset % num_exploits
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         exploit_name = JAX_IDX_TO_EXPLOIT_CLASS.get(exploit_idx, f"exploit_{exploit_idx}")
         return f"{exploit_name}({hostname})"
 
     if RED_PRIVESC_START <= action_idx < RED_IMPACT_START:
         host_idx = action_idx - RED_PRIVESC_START
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         return f"PrivEsc({hostname})"
 
     if action_idx >= RED_IMPACT_START:
         host_idx = action_idx - RED_IMPACT_START
-        hostname = HOST_NAMES.get(host_idx, f"host_{host_idx}")
+        hostname = host_names.get(host_idx, f"host_{host_idx}")
         return f"Impact({hostname})"
 
     return f"Unknown({action_idx})"
