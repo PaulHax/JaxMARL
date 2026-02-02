@@ -251,6 +251,10 @@ def make_train(config):
 
             advantages, targets = _calculate_gae(traj_batch, last_val)
 
+            # Normalize advantages on FULL batch before splitting into minibatches
+            # This matches SB3's behavior and provides more stable gradients
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
             def _update_epoch(update_state, unused):
                 def _update_minbatch(train_state, batch_info):
                     traj_batch, advantages, targets = batch_info
@@ -269,7 +273,7 @@ def make_train(config):
                         )
 
                         ratio = jnp.exp(log_prob - traj_batch.log_prob)
-                        gae = (gae - gae.mean()) / (gae.std() + 1e-8)
+                        # Advantages already normalized on full batch before epoch loop
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
                             jnp.clip(
@@ -394,10 +398,9 @@ def main(config):
             print("Warning: CybORG evaluation requested but CybORG not available")
 
     if not os.environ.get("MLFLOW_TRACKING_URI"):
-        cyber_root = Path(__file__).resolve().parent.parent.parent.parent
-        mlflow_dir = cyber_root / "mlflow"
-        mlflow_dir.mkdir(parents=True, exist_ok=True)
-        mlflow.set_tracking_uri(f"sqlite:///{mlflow_dir / 'mlflow.db'}")
+        exp_dir = Path(config.get("EXPERIMENT_DIR", "experiments"))
+        exp_dir.mkdir(parents=True, exist_ok=True)
+        mlflow.set_tracking_uri(f"sqlite:///{exp_dir / 'mlflow.db'}")
     mlflow.set_experiment(config.get("MLFLOW_EXPERIMENT", "cage-training"))
     mlflow.start_run(run_name=f"ippo-vs-{red_agent}")
     log_reproducibility(Path(__file__))
@@ -472,12 +475,16 @@ def main(config):
     num_updates = int(config["NUM_UPDATES"])
     steps_per_update = config["NUM_ENVS"] * config["NUM_STEPS"]
 
+    best_reward = float('-inf')
+    best_update = 0
+
     for update_idx in range(num_updates):
         step = (update_idx + 1) * steps_per_update
+        reward = float(metrics["returned_episode_returns"][update_idx].mean())
         update_metrics = {
             "update": update_idx + 1,
             "steps": step,
-            "episode_reward_mean": float(metrics["returned_episode_returns"][update_idx].mean()),
+            "episode_reward_mean": reward,
             "loss": float(metrics["total_loss"][update_idx].mean()),
             "policy_loss": float(metrics["actor_loss"][update_idx].mean()),
             "value_loss": float(metrics["critic_loss"][update_idx].mean()),
@@ -488,7 +495,17 @@ def main(config):
         }
         metrics_logger.log(update_metrics, step=step)
 
+        if reward > best_reward:
+            best_reward = reward
+            best_update = update_idx + 1
+
     metrics_logger.close()
+
+    if best_update < num_updates - 5:
+        print(f"\n⚠️  Policy collapse detected!")
+        print(f"   Best reward: {best_reward:.1f} at update {best_update}")
+        print(f"   Final reward: {float(metrics['returned_episode_returns'][-1].mean()):.1f}")
+        print(f"   Consider: lower LR, higher ENT_COEF, fewer UPDATE_EPOCHS")
 
     if num_seeds > 1:
         params = jax.tree.map(lambda x: x[0], out["runner_state"][0][0].params)
@@ -508,6 +525,7 @@ def main(config):
     print(f"\nTraining complete!")
     print(f"Wall time: {elapsed:.1f}s")
     print(f"Throughput: {sps:,.0f} steps/sec")
+    print(f"Best returns: {best_reward:.2f} (update {best_update})")
     print(f"Final returns: {final_return:.2f}")
     print(f"Final entropy: {final_entropy:.4f}")
     print(f"Saved to: {save_dir}")
