@@ -13,6 +13,16 @@ BLUE_REMOVE_START = 15
 BLUE_DECOY_START = 28
 BLUE_RESTORE_START = 132
 
+JAX_TO_CYBORG_SCENARIO = {
+    'Scenario2': 'Scenario2',
+    'hosts_2': 'scalability_experiments/hosts_2',
+    'hosts_3': 'scalability_experiments/hosts_3',
+    'hosts_4': 'scalability_experiments/hosts_4',
+    'hosts_5': 'scalability_experiments/hosts_5',
+}
+
+SCALABILITY_SCENARIOS = {'hosts_2', 'hosts_3', 'hosts_4', 'hosts_5'}
+
 
 def action_to_type(action: int) -> int:
     """Map action index to action type for BLUE_ACTION_NAMES."""
@@ -51,16 +61,23 @@ def setup_cyborg_eval(cyborg_path: str):
 
 def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
                        steps: int = 100, seed: int = 42, track_actions: bool = True,
-                       export_dir: str = None, red_agent_name: str = "bline"):
+                       export_dir: str = None, red_agent_name: str = "bline",
+                       scenario: str = "Scenario2"):
     """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
 
     Args:
         red_agent_name: "bline" or "meander"
+        scenario: JAX scenario name (e.g., "Scenario2", "hosts_2")
 
     Returns dict with: confidentiality, integrity, availability, resilience, reward,
     optionally action distribution percentages, and trajectory_dir path.
     """
     if not CYBORG_AVAILABLE:
+        return None
+
+    cyborg_scenario = JAX_TO_CYBORG_SCENARIO.get(scenario)
+    if cyborg_scenario is None:
+        print(f"Warning: No CybORG equivalent for scenario '{scenario}', skipping eval")
         return None
 
     cyborg_dir = Path(cyborg_path)
@@ -69,10 +86,17 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
     from CybORG.Agents.SimpleAgents.JaxPolicyAgent import JaxPolicyAgent
     from CybORG.Agents import B_lineAgent
     from CybORG.Agents.SimpleAgents.Meander import RedMeanderAgent
+    from CybORG.Agents.SimpleAgents.Meander_Resilience import RedMeanderAgent_Resilience
     from cage_experiment import CAGEExperiment
     from CybORG.AlignmentMetric.resilience_measure import ResilienceMetric
 
-    red_agent_class = RedMeanderAgent if red_agent_name == "meander" else B_lineAgent
+    is_scalability = scenario in SCALABILITY_SCENARIOS
+    if is_scalability:
+        red_agent_class = RedMeanderAgent_Resilience
+    elif red_agent_name == "meander":
+        red_agent_class = RedMeanderAgent
+    else:
+        red_agent_class = B_lineAgent
 
     agent = JaxPolicyAgent(checkpoint_path)
     metric = ResilienceMetric()
@@ -83,7 +107,7 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
     cage = CAGEExperiment(
         agent,
         red_agent=red_agent_class,
-        scenario="Scenario2",
+        scenario=cyborg_scenario,
         seed=seed,
         metric=metric,
         experiment_export_dir=export_dir,
@@ -144,7 +168,7 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
 
 def run_final_cyborg_eval(checkpoint_path: str, cyborg_path: str, mlflow_module,
                           total_steps: int, export_dir: str, episodes: int = 3,
-                          steps: int = 100, seed: int = 42):
+                          steps: int = 100, seed: int = 42, scenario: str = "Scenario2"):
     """Run CybORG evaluation against both B_line and Meander, log trajectories to MLflow.
 
     This is the default post-training evaluation that logs trajectory JSONs as artifacts.
@@ -163,7 +187,8 @@ def run_final_cyborg_eval(checkpoint_path: str, cyborg_path: str, mlflow_module,
         results = evaluate_in_cyborg(
             checkpoint_path, cyborg_path,
             episodes=episodes, steps=steps, seed=seed,
-            export_dir=export_dir, red_agent_name=red_agent
+            export_dir=export_dir, red_agent_name=red_agent,
+            scenario=scenario
         )
 
         if results:

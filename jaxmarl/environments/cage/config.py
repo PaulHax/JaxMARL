@@ -266,46 +266,38 @@ def create_scalable_config(
 
 
 def create_hosts_2_config() -> ScenarioConfig:
-    """Create hosts_2 scalability scenario (approximately 2x base hosts)."""
-    return create_scalable_config(
-        num_users=10,
-        num_enterprise=6,
-        num_op_hosts=7,
-        num_op_servers=1,
-        name='hosts_2',
+    """Create hosts_2 scalability scenario from CybORG YAML."""
+    from jaxmarl.environments.cage.cyborg_loader import load_scenario_from_yaml
+    return load_scenario_from_yaml(
+        CYBORG_SCENARIOS_PATH / 'scalability_experiments' / 'hosts_2.yaml',
+        CYBORG_IMAGES_PATH,
     )
 
 
 def create_hosts_3_config() -> ScenarioConfig:
-    """Create hosts_3 scalability scenario (approximately 3x base hosts)."""
-    return create_scalable_config(
-        num_users=15,
-        num_enterprise=9,
-        num_op_hosts=11,
-        num_op_servers=1,
-        name='hosts_3',
+    """Create hosts_3 scalability scenario from CybORG YAML."""
+    from jaxmarl.environments.cage.cyborg_loader import load_scenario_from_yaml
+    return load_scenario_from_yaml(
+        CYBORG_SCENARIOS_PATH / 'scalability_experiments' / 'hosts_3.yaml',
+        CYBORG_IMAGES_PATH,
     )
 
 
 def create_hosts_4_config() -> ScenarioConfig:
-    """Create hosts_4 scalability scenario (approximately 4x base hosts)."""
-    return create_scalable_config(
-        num_users=20,
-        num_enterprise=12,
-        num_op_hosts=15,
-        num_op_servers=1,
-        name='hosts_4',
+    """Create hosts_4 scalability scenario from CybORG YAML."""
+    from jaxmarl.environments.cage.cyborg_loader import load_scenario_from_yaml
+    return load_scenario_from_yaml(
+        CYBORG_SCENARIOS_PATH / 'scalability_experiments' / 'hosts_4.yaml',
+        CYBORG_IMAGES_PATH,
     )
 
 
 def create_hosts_5_config() -> ScenarioConfig:
-    """Create hosts_5 scalability scenario (approximately 5x base hosts)."""
-    return create_scalable_config(
-        num_users=25,
-        num_enterprise=16,
-        num_op_hosts=19,
-        num_op_servers=1,
-        name='hosts_5',
+    """Create hosts_5 scalability scenario from CybORG YAML."""
+    from jaxmarl.environments.cage.cyborg_loader import load_scenario_from_yaml
+    return load_scenario_from_yaml(
+        CYBORG_SCENARIOS_PATH / 'scalability_experiments' / 'hosts_5.yaml',
+        CYBORG_IMAGES_PATH,
     )
 
 

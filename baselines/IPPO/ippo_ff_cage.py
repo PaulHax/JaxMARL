@@ -532,7 +532,8 @@ def main(config):
 
     run_final_cyborg_eval(
         str(checkpoint_path), cyborg_path, mlflow, total_steps,
-        export_dir=str(save_dir), episodes=eval_episodes, steps=100, seed=config["SEED"]
+        export_dir=str(save_dir), episodes=eval_episodes, steps=100, seed=config["SEED"],
+        scenario=config["ENV_KWARGS"].get("scenario", "Scenario2")
     )
 
     mlflow.end_run()
