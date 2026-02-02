@@ -260,7 +260,10 @@ class TestPrivEscCybORGParity:
                 f"Step {sr.step}: Blue reward mismatch CybORG={cyborg_blue}, JAX={jax_blue}"
 
     def test_privesc_on_enterprise_host(self):
-        """CybORG vs JAX: PrivEsc on Enterprise host after lateral movement."""
+        """CybORG vs JAX: PrivEsc on Enterprise host after lateral movement.
+
+        Uses Enterprise1 which is reachable from User subnet (as used in B_line).
+        """
         harness = DifferentialHarness(seed=42, max_steps=15, verbose=False)
 
         red_actions = [
@@ -268,9 +271,9 @@ class TestPrivEscCybORGParity:
             red_scan_host('User1'),
             red_exploit_host('User1', EXPLOIT_SSH),
             red_privesc_host('User1'),
-            red_scan_host('Enterprise0'),
-            red_exploit_host('Enterprise0', EXPLOIT_SSH),
-            red_privesc_host('Enterprise0'),
+            red_scan_host('Enterprise1'),
+            red_exploit_host('Enterprise1', EXPLOIT_SSH),
+            red_privesc_host('Enterprise1'),
             0,
         ]
 

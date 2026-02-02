@@ -315,12 +315,12 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
     # Special host index for BlueKeep behavior
     user2_host_idx = host_ids.get('User2', 10)
 
-    # Build bruteforceable_hosts: all hosts except Defender, Op_Host2, Op_Server0
-    # CybORG SSHBruteForce checks for bruteforceable users - these hosts don't have any
-    bruteforceable_hosts = jnp.ones(num_hosts, dtype=jnp.bool_)
-    for non_bf_host in ['Defender', 'Op_Host2', 'Op_Server0']:
-        if non_bf_host in host_ids:
-            bruteforceable_hosts = bruteforceable_hosts.at[host_ids[non_bf_host]].set(False)
+    # Build bruteforceable_hosts from config
+    # CybORG SSHBruteForce checks for bruteforceable users in host image
+    bruteforceable_hosts = jnp.zeros(num_hosts, dtype=jnp.bool_)
+    for host in config.hosts:
+        if host.name in host_ids and host.has_bruteforceable_users:
+            bruteforceable_hosts = bruteforceable_hosts.at[host_ids[host.name]].set(True)
 
     # Build rfi_vulnerable_hosts from config service_properties
     # CybORG HTTPRFI checks for 'rfi' in process.properties

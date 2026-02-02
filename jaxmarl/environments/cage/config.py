@@ -49,6 +49,7 @@ class HostConfig:
     services: List[str] = field(default_factory=list)
     service_properties: Dict[str, List[str]] = field(default_factory=dict)  # e.g. {'http': ['rfi']}
     is_operational_target: bool = False  # for Impact action
+    has_bruteforceable_users: bool = False  # for SSHBruteForce
 
 
 @dataclass

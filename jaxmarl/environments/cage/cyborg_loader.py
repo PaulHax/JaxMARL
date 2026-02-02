@@ -121,6 +121,23 @@ def extract_os_type(system_info: dict) -> str:
     return 'windows' if os_type.upper() == 'WINDOWS' else 'linux'
 
 
+def extract_has_bruteforceable_users(user_info) -> bool:
+    """Check if any user on the host has Bruteforceable=True.
+
+    User info is a list of user dicts, each containing Username, Bruteforceable, etc.
+    CybORG uses 'Bruteforceable' key (capital B).
+    """
+    if isinstance(user_info, list):
+        for user_data in user_info:
+            if isinstance(user_data, dict) and user_data.get('Bruteforceable', False):
+                return True
+    elif isinstance(user_info, dict):
+        for username, user_data in user_info.items():
+            if isinstance(user_data, dict) and user_data.get('Bruteforceable', False):
+                return True
+    return False
+
+
 def load_scenario_from_yaml(
     scenario_path: Path,
     images_path: Path,
@@ -209,6 +226,10 @@ def load_scenario_from_yaml(
         if 'OTService' in cyborg_services:
             is_operational_target = True
 
+        # Check for bruteforceable users (for SSHBruteForce)
+        user_info = host_image_data.get('User Info', {})
+        has_bruteforceable_users = extract_has_bruteforceable_users(user_info)
+
         host_configs.append(HostConfig(
             name=host_name,
             subnet=host_subnet,
@@ -218,6 +239,7 @@ def load_scenario_from_yaml(
             services=services,
             service_properties=service_properties,
             is_operational_target=is_operational_target,
+            has_bruteforceable_users=has_bruteforceable_users,
         ))
 
     # Build subnet configs with connectivity
