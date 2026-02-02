@@ -600,6 +600,9 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
     CybORG behavior: Scan works on any host that is routable from a session Red owns.
     Network routing is determined by subnet adjacency - Red needs a session in
     an adjacent subnet to scan the target.
+
+    Note: CybORG allows scanning hosts even if their subnet wasn't discovered first.
+    The "discovered" state only tracks hosts revealed via DiscoverSubnet, not scanned hosts.
     """
     num_hosts = const.num_hosts
     num_subnets = const.num_subnets
