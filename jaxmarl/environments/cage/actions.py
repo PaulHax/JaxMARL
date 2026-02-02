@@ -603,8 +603,8 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
     Network routing is determined by subnet adjacency - Red needs a session in
     an adjacent subnet to scan the target.
 
-    Note: CybORG allows scanning hosts even if their subnet wasn't discovered first.
-    The "discovered" state only tracks hosts revealed via DiscoverSubnet, not scanned hosts.
+    Note: CybORG does NOT require DiscoverSubnet before scanning. If Red has routing
+    to a host (via session in adjacent subnet), they can scan it directly.
     """
     num_hosts = const.num_hosts
     num_subnets = const.num_subnets
@@ -710,11 +710,11 @@ def _apply_exploit(
     # This makes decoys useful on hosts that DON'T have the vulnerable service
     has_target = has_vulnerable_service | decoy_present
 
-    # Exploit succeeds ONLY if: scanned, real service exists, no decoy blocks,
-    # AND exploit-specific preconditions are met (bruteforceable for SSH, RFI for HTTP/HTTPS)
-    # CybORG requires DiscoverNetworkServices first to populate known ports
-    host_scanned = state.red_scanned_hosts_jax[target_host]
-    success = (host_scanned & has_route & has_vulnerable_service &
+    # Exploit succeeds if: host is known (discovered OR scanned), real service exists,
+    # no decoy blocks, AND exploit-specific preconditions are met
+    # CybORG allows exploit if Red knows the host via DiscoverSubnet OR DiscoverNetworkServices
+    host_known = state.red_discovered_hosts_jax[target_host] | state.red_scanned_hosts_jax[target_host]
+    success = (host_known & has_route & has_vulnerable_service &
                ~decoy_present & ssh_check & rfi_check)
 
     # FTPDirectoryTraversal(1), HarakaRCE(4), SQLInjection(5), EternalBlue(6), BlueKeep(7) give root
