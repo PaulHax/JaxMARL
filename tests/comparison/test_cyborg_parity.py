@@ -41,8 +41,7 @@ from tests.comparison.scenarios import (
     BLINE_KILLCHAIN_STANDARD, KILLCHAIN_VIA_ENTERPRISE0, KILLCHAIN_VIA_HARAKA,
     get_path_to_subnet, get_host_subnet,
     SUBNET_USER, SUBNET_ENTERPRISE, SUBNET_OPERATIONAL,
-    EXPLOIT_SSH, EXPLOIT_FTP, EXPLOIT_HTTP, EXPLOIT_HTTPS, EXPLOIT_HARAKA,
-    EXPLOIT_SQL, EXPLOIT_ETERNAL, EXPLOIT_BLUEKEEP,
+    EXPLOIT_SSH, EXPLOIT_HTTP, EXPLOIT_HTTPS, EXPLOIT_HARAKA,
     DECOY_APACHE, DECOY_FEMITTER, DECOY_HARAKA, DECOY_SMSS,
     DECOY_SSHD, DECOY_SVCHOST, DECOY_TOMCAT, DECOY_VSFTPD,
 )
@@ -1504,10 +1503,6 @@ class TestIndividualExploits:
         (EXPLOIT_HTTP, "HTTPRFI", "Enterprise1"),
         (EXPLOIT_HTTPS, "HTTPSRFI", "Enterprise1"),
         (EXPLOIT_HARAKA, "HarakaRCE", "User3"),
-        pytest.param(EXPLOIT_SQL, "SQLInjection", "Enterprise0",
-                     marks=pytest.mark.skip(reason="Enterprise0 has ssh/http services, not mysql - SQLInjection requires mysql")),
-        pytest.param(EXPLOIT_FTP, "FTPDirectoryTraversal", "Enterprise0",
-                     marks=pytest.mark.skip(reason="Enterprise0 has ssh/http services, not ftp - FTPDirectoryTraversal requires ftp")),
     ])
     def test_individual_exploit_type(self, harness, exploit_type, exploit_name, target_host):
         """Test specific exploit type reaches target and matches CybORG."""
@@ -1772,7 +1767,7 @@ class TestImpactHostRestrictions:
             red_exploit_host('User4', EXPLOIT_HARAKA),
             red_privesc_host('User4'),
             red_scan_host('Enterprise0'),
-            red_exploit_host('Enterprise0', EXPLOIT_SQL),  # SQLInjection gives root
+            red_exploit_host('Enterprise0', EXPLOIT_HTTP),
             red_privesc_host('Enterprise0'),
             red_impact_host('Enterprise0'),  # Should fail
         ]
