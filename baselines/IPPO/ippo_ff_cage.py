@@ -251,6 +251,10 @@ def make_train(config):
 
             advantages, targets = _calculate_gae(traj_batch, last_val)
 
+            # Normalize advantages on FULL batch before splitting into minibatches
+            # This matches SB3's behavior and provides more stable gradients
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+
             def _update_epoch(update_state, unused):
                 def _update_minbatch(train_state, batch_info):
                     traj_batch, advantages, targets = batch_info
@@ -269,7 +273,7 @@ def make_train(config):
                         )
 
                         ratio = jnp.exp(log_prob - traj_batch.log_prob)
-                        gae = (gae - gae.mean()) / (gae.std() + 1e-8)
+                        # Advantages already normalized on full batch before epoch loop
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
                             jnp.clip(
