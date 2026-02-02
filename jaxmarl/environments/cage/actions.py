@@ -676,6 +676,22 @@ def _apply_exploit(
     exploit_vulnerabilities = const.service_exploits[:, exploit_type]
     has_vulnerable_service = jnp.any(services_on_host & exploit_vulnerabilities)
 
+    # SSH (exploit_type 0) requires bruteforceable users on target host
+    # CybORG's SSHBruteForce iterates through users and checks bruteforceable flag
+    ssh_check = jnp.where(
+        exploit_type == 0,  # SSHBruteForce
+        const.bruteforceable_hosts[target_host],
+        True  # non-SSH exploits don't need this check
+    )
+
+    # HTTP/HTTPS (exploit_type 2,3) requires RFI vulnerability on target host
+    # CybORG's HTTPRFI checks "rfi" in process.properties
+    rfi_check = jnp.where(
+        (exploit_type == 2) | (exploit_type == 3),  # HTTPRFI or HTTPSRFI
+        const.rfi_vulnerable_hosts[target_host],
+        True  # non-HTTP exploits don't need this check
+    )
+
     # Check if any blocking decoy is deployed on the target host
     # EXPLOIT_BLOCKED_BY_DECOYS[exploit_type] gives [exploit_idx, decoy1, decoy2]
     blocking_decoys = EXPLOIT_BLOCKED_BY_DECOYS[exploit_type]
@@ -689,10 +705,12 @@ def _apply_exploit(
     # This makes decoys useful on hosts that DON'T have the vulnerable service
     has_target = has_vulnerable_service | decoy_present
 
-    # Exploit succeeds ONLY if: scanned, real service exists, no decoy blocks
+    # Exploit succeeds ONLY if: scanned, real service exists, no decoy blocks,
+    # AND exploit-specific preconditions are met (bruteforceable for SSH, RFI for HTTP/HTTPS)
     # CybORG requires DiscoverNetworkServices first to populate known ports
     host_scanned = state.red_scanned_hosts_jax[target_host]
-    success = host_scanned & has_route & has_vulnerable_service & ~decoy_present
+    success = (host_scanned & has_route & has_vulnerable_service &
+               ~decoy_present & ssh_check & rfi_check)
 
     # FTPDirectoryTraversal(1), HarakaRCE(4), SQLInjection(5), EternalBlue(6), BlueKeep(7) give root
     # Exception: BlueKeep on User2 gives NetworkService (user-level) due to RDP process user

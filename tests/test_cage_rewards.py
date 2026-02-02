@@ -10,7 +10,7 @@ from jaxmarl.environments.cage.state import (
 )
 from jaxmarl.environments.cage.rewards import (
     compute_rewards, compute_rewards_simple, get_max_red_reward,
-    CONFIDENTIALITY_SCALE, AVAILABILITY_SCALE, BLUE_RESTORE_COST, BLUE_INVALID_ACTION_COST,
+    CONFIDENTIALITY_SCALE, AVAILABILITY_SCALE, BLUE_RESTORE_COST,
 )
 from jaxmarl.environments.cage.actions import (
     BLUE_SLEEP, BLUE_RESTORE_START, BLUE_REMOVE_START, BLUE_DECOY_START,
@@ -146,15 +146,15 @@ class TestActionCosts:
 
         assert rewards['blue'] == 0.0  # No compromise, no cost
 
-    def test_failed_remove_penalty(self, const, initial_state):
-        """Failed Remove actions incur -0.1 penalty (CybORG InvalidAction.cost)."""
+    def test_remove_has_no_penalty(self, const, initial_state):
+        """Remove actions have no penalty (CybORG Remove.cost = 0)."""
         state = initial_state.replace(last_blue_action_success=jnp.array(False))
         remove_action = jnp.array(BLUE_REMOVE_START + HOST_IDS['Enterprise0'])
         red_sleep = jnp.array(0)
 
         rewards = compute_rewards(state, const, remove_action, red_sleep)
 
-        assert rewards['blue'] == BLUE_INVALID_ACTION_COST
+        assert rewards['blue'] == 0.0  # No penalty for Remove (CybORG Remove.cost = 0)
 
     def test_successful_action_no_penalty(self, const, initial_state):
         """Successful actions don't incur invalid action penalty."""
