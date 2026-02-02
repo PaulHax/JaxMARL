@@ -37,14 +37,18 @@ class TestRemovePenaltyCybORGParity:
     """Differential tests comparing CybORG Remove behavior to JAX.
 
     Key CybORG behavior:
-    - Remove succeeds if there's ANY Red session on the host
-    - Remove removes user-level sessions (not root/SYSTEM)
+    - Remove requires prior activity detection (Monitor/Analyse must run after compromise)
+    - Remove only removes USER-level sessions (not PRIVILEGED/root)
     - Remove does NOT have an action penalty (unlike Restore)
-    - Remove success is NOT gated by activity detection or privilege level
+    - Blue acts FIRST each step, so Monitor must run in a LATER step than Exploit
     """
 
     def test_remove_on_user_compromise_no_penalty(self):
-        """CybORG vs JAX: Remove on USER-level compromised host should match rewards."""
+        """CybORG vs JAX: Remove on USER-level compromised host should match rewards.
+
+        IMPORTANT: Monitor at step 3 runs AFTER Exploit at step 2 has completed,
+        so it detects the malicious processes. Remove at step 4 then succeeds.
+        """
         harness = DifferentialHarness(seed=42, max_steps=10, verbose=False)
 
         red_actions = [
@@ -52,13 +56,15 @@ class TestRemovePenaltyCybORGParity:
             red_scan_host('User1'),
             red_exploit_host('User1', EXPLOIT_SSH),
             0,  # Sleep - stay at USER level
+            0,  # Sleep
         ]
 
         blue_actions = [
             BLUE_MONITOR,
             BLUE_MONITOR,
             BLUE_MONITOR,
-            blue_remove_host('User1'),  # Remove at step 3 when Red has USER access
+            BLUE_MONITOR,  # Monitor AFTER Exploit to detect activity
+            blue_remove_host('User1'),  # Remove at step 4 when activity has been detected
         ]
 
         red_policy = scripted_red_policy_factory(red_actions)
@@ -66,7 +72,7 @@ class TestRemovePenaltyCybORGParity:
 
         result = harness.run_episode(blue_policy, red_policy)
 
-        remove_step = result.step_results[3]  # Step 4 (0-indexed as 3)
+        remove_step = result.step_results[4]  # Step 5 (0-indexed as 4)
 
         assert abs(remove_step.cyborg_state.reward_blue - remove_step.jax_state.reward_blue) < 0.02, \
             f"Blue reward mismatch at Remove step: CybORG={remove_step.cyborg_state.reward_blue}, JAX={remove_step.jax_state.reward_blue}"

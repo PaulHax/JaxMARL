@@ -348,12 +348,13 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
 def _apply_monitor(state: CageState, const: CageConst) -> CageState:
     """Monitor action: detect red activity on all hosts, clear unknown flags.
 
-    CybORG behavior: Monitor detects anomalies from Red's presence. Since
-    observations show Red sessions as persistent anomalies, Monitor should
-    also detect these. The initial foothold is hidden (part of baseline).
+    CybORG behavior: Monitor detects process anomalies from Red's presence
+    (malware, backdoors, shells). Scan activity creates network connections
+    but not detectable processes. Only Exploit/PrivEsc create malware that
+    Monitor can detect. The initial foothold is hidden (part of baseline).
     """
-    # Detect recent activity (any non-zero activity type means activity occurred)
-    recent_activity = state.red_activity_this_step > ACTIVITY_NONE
+    # Detect recent exploit-level activity (Scan doesn't create detectable processes)
+    recent_activity = state.red_activity_this_step >= ACTIVITY_EXPLOIT
 
     # Detect persistent Red presence (sessions), excluding initial foothold
     # This matches what observations show to Blue
@@ -374,10 +375,11 @@ def _apply_analyse(state: CageState, target_host: int, const: CageConst) -> Cage
 
     CybORG behavior: Analyse runs DensityScout which detects malware files
     (Density >= 0.9). This is the ONLY way Blue can see Privileged compromise.
-    Also detects persistent Red presence (sessions).
+    Also detects persistent Red presence (sessions). Scan doesn't create
+    detectable malware, only Exploit/PrivEsc do.
     """
-    # Detect recent activity OR persistent Red presence on target host
-    has_recent_activity = state.red_activity_this_step[target_host] > ACTIVITY_NONE
+    # Detect recent exploit-level activity (Scan doesn't create malware)
+    has_recent_activity = state.red_activity_this_step[target_host] >= ACTIVITY_EXPLOIT
     has_red_session = state.red_sessions[target_host] > 0
 
     # Check if this is the initial foothold (hidden from Blue)

@@ -92,8 +92,13 @@ class TestInitialFootholdHidden:
 class TestMonitorDetectionRates:
     """Test Monitor detection rates for different Red actions."""
 
-    def test_monitor_detects_scan(self):
-        """Monitor should detect scan activity."""
+    def test_monitor_does_not_detect_scan(self):
+        """Monitor should NOT detect scan activity (only creates network connections).
+
+        CybORG behavior: Monitor detects process anomalies via DensityScout.
+        Scan creates network connections, not malicious processes. Only
+        Exploit/PrivEsc create detectable malware.
+        """
         harness = DifferentialHarness(seed=42, max_steps=10, verbose=False)
 
         red_actions = [
@@ -106,7 +111,7 @@ class TestMonitorDetectionRates:
 
         final = result.step_results[-1]
         detected = final.jax_state.host_activity_detected.get('User1', False)
-        assert detected, "Monitor should detect scan activity"
+        assert not detected, "Monitor should NOT detect scan activity (only Exploit creates detectable processes)"
 
     def test_monitor_detects_exploit(self):
         """Monitor should detect exploit activity."""
