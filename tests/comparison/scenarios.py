@@ -91,22 +91,21 @@ def blue_decoy_host(hostname: str, decoy_type: int) -> int:
 
 
 BLINE_KILLCHAIN_STANDARD = [
-    red_discover_subnet(SUBNET_USER),
-    red_scan_host('User1'),
-    red_exploit_host('User1', EXPLOIT_SSH),
-    red_privesc_host('User1'),
-    red_discover_subnet(SUBNET_ENTERPRISE),
-    red_scan_host('Enterprise1'),
-    red_exploit_host('Enterprise1', EXPLOIT_SSH),
-    red_privesc_host('Enterprise1'),
-    red_discover_subnet(SUBNET_OPERATIONAL),
-    red_scan_host('Enterprise2'),
-    red_exploit_host('Enterprise2', EXPLOIT_SSH),
-    red_privesc_host('Enterprise2'),
-    red_scan_host('Op_Server0'),
-    red_exploit_host('Op_Server0', EXPLOIT_SSH),
-    red_privesc_host('Op_Server0'),
-    red_impact_host('Op_Server0'),
+    red_discover_subnet(SUBNET_USER),             # State 0
+    red_scan_host('User1'),                       # State 1
+    red_exploit_host('User1', EXPLOIT_SSH),       # State 2
+    red_privesc_host('User1'),                    # State 3
+    red_scan_host('Enterprise1'),                 # State 4 - scan, NOT discover subnet
+    red_exploit_host('Enterprise1', EXPLOIT_SSH), # State 5
+    red_privesc_host('Enterprise1'),              # State 6
+    red_discover_subnet(SUBNET_ENTERPRISE),       # State 7 - Enterprise subnet, NOT Operational
+    red_scan_host('Enterprise2'),                 # State 8
+    red_exploit_host('Enterprise2', EXPLOIT_SSH), # State 9
+    red_privesc_host('Enterprise2'),              # State 10
+    red_scan_host('Op_Server0'),                  # State 11
+    red_exploit_host('Op_Server0', EXPLOIT_SSH),  # State 12
+    red_privesc_host('Op_Server0'),               # State 13
+    red_impact_host('Op_Server0'),                # State 14
 ]
 
 
