@@ -47,6 +47,7 @@ class HostConfig:
     confidentiality: float = 0.1  # reward weight
     availability: float = 0.0  # reward weight
     services: List[str] = field(default_factory=list)
+    service_properties: Dict[str, List[str]] = field(default_factory=dict)  # e.g. {'http': ['rfi']}
     is_operational_target: bool = False  # for Impact action
 
 

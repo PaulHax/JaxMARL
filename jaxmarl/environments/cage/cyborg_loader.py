@@ -6,7 +6,7 @@ stays in sync with CybORG's scenario definitions without manual duplication.
 """
 
 from pathlib import Path
-from typing import List
+from typing import Dict, List, Tuple
 import yaml
 
 from jaxmarl.environments.cage.config import (
@@ -54,22 +54,33 @@ def load_yaml_file(file_path: Path) -> dict:
         return yaml.load(f, Loader=yaml.FullLoader)
 
 
-def extract_services_from_processes(processes: List[dict]) -> List[str]:
-    """Extract service names from CybORG process definitions.
+def extract_services_from_processes(processes: List[dict]) -> Tuple[List[str], Dict[str, List[str]]]:
+    """Extract service names and their properties from CybORG process definitions.
 
     Services are identified by:
     1. Port number (e.g., port 22 → ssh)
     2. Process name (e.g., mysql → mysql)
     3. Process Type for services like RDP
     4. Process Version for haraka detection
+
+    Returns:
+        Tuple of (services list, service_properties dict)
+        service_properties maps service name to list of properties (e.g., {'http': ['rfi']})
     """
     services = set()
+    service_properties: Dict[str, List[str]] = {}
 
     for process in processes:
         connections = process.get('Connections', [])
         process_name = process.get('Process Name', '').lower()
         process_version = process.get('Process Version', '')
         process_type = process.get('Process Type', '').lower()
+        raw_props = process.get('Properties', [])
+        # Normalize properties: can be a list ['rfi'] or a string 'rfi'
+        if isinstance(raw_props, str):
+            properties = [raw_props]
+        else:
+            properties = list(raw_props) if raw_props else []
 
         # Check connections for port-based services
         for conn in connections:
@@ -79,20 +90,29 @@ def extract_services_from_processes(processes: List[dict]) -> List[str]:
                 # Special case: port 25 with haraka version
                 if port == 25 and 'haraka' in process_version.lower():
                     services.add('haraka')
+                    if properties:
+                        service_properties['haraka'] = list(properties)
                 else:
                     services.add(service)
+                    if properties:
+                        service_properties[service] = list(properties)
 
             # Check port + process type combinations
             key = (port, process_type)
             if key in PORT_PROCESS_TYPE_TO_SERVICE:
-                services.add(PORT_PROCESS_TYPE_TO_SERVICE[key])
+                svc = PORT_PROCESS_TYPE_TO_SERVICE[key]
+                services.add(svc)
+                if properties:
+                    service_properties[svc] = list(properties)
 
         # Check process name for additional services
         for proc_pattern, service in PROCESS_NAME_TO_SERVICE.items():
             if proc_pattern.lower() in process_name:
                 services.add(service)
+                if properties:
+                    service_properties[service] = list(properties)
 
-    return sorted(services)
+    return sorted(services), service_properties
 
 
 def extract_os_type(system_info: dict) -> str:
@@ -169,9 +189,9 @@ def load_scenario_from_yaml(
         else:
             host_image_data = {}
 
-        # Extract services from processes
+        # Extract services and their properties from processes
         processes = host_image_data.get('Processes', [])
-        services = extract_services_from_processes(processes)
+        services, service_properties = extract_services_from_processes(processes)
 
         # Extract OS type
         system_info = host_image_data.get('System info', {})
@@ -196,6 +216,7 @@ def load_scenario_from_yaml(
             confidentiality=confidentiality,
             availability=availability,
             services=services,
+            service_properties=service_properties,
             is_operational_target=is_operational_target,
         ))
 

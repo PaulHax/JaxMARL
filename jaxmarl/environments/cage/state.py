@@ -159,6 +159,14 @@ class CageConst:
     # Service vulnerability mapping: which exploits work on which services
     service_exploits: chex.Array       # (num_services, num_exploits) bool: service i vulnerable to exploit j
 
+    # Exploit preconditions (matching CybORG behavior)
+    # SSH Bruteforce requires bruteforceable users on target host
+    # Hosts WITHOUT bruteforceable users: Defender, Op_Host2, Op_Server0
+    bruteforceable_hosts: chex.Array   # (num_hosts,) bool: host has bruteforceable users
+    # HTTP/HTTPS RFI requires 'rfi' property in process
+    # Only Enterprise0-2 have RFI-enabled HTTP
+    rfi_vulnerable_hosts: chex.Array   # (num_hosts,) bool: host has RFI vulnerability
+
     # Indices for decoy-deployable hosts
     decoy_host_indices: chex.Array     # (num_decoy_hosts,) int: indices of hosts that can have decoys
 
@@ -307,6 +315,22 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
     # Special host index for BlueKeep behavior
     user2_host_idx = host_ids.get('User2', 10)
 
+    # Build bruteforceable_hosts: all hosts except Defender, Op_Host2, Op_Server0
+    # CybORG SSHBruteForce checks for bruteforceable users - these hosts don't have any
+    bruteforceable_hosts = jnp.ones(num_hosts, dtype=jnp.bool_)
+    for non_bf_host in ['Defender', 'Op_Host2', 'Op_Server0']:
+        if non_bf_host in host_ids:
+            bruteforceable_hosts = bruteforceable_hosts.at[host_ids[non_bf_host]].set(False)
+
+    # Build rfi_vulnerable_hosts from config service_properties
+    # CybORG HTTPRFI checks for 'rfi' in process.properties
+    rfi_vulnerable_hosts = jnp.zeros(num_hosts, dtype=jnp.bool_)
+    for host in config.hosts:
+        if host.name in host_ids:
+            has_rfi = any('rfi' in props for props in host.service_properties.values())
+            if has_rfi:
+                rfi_vulnerable_hosts = rfi_vulnerable_hosts.at[host_ids[host.name]].set(True)
+
     return CageConst(
         adjacency=adjacency,
         subnet_adjacency=subnet_adjacency,
@@ -317,6 +341,8 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
         initial_services=initial_services,
         operational_targets=operational_targets,
         service_exploits=service_exploits,
+        bruteforceable_hosts=bruteforceable_hosts,
+        rfi_vulnerable_hosts=rfi_vulnerable_hosts,
         decoy_host_indices=decoy_host_indices,
         red_start_hosts=red_start_hosts,
         bline_user_host=bline_user_host,
