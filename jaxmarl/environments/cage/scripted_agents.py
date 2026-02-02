@@ -46,26 +46,77 @@ BLINE_JUMP_BACK = jnp.array([
 # CybORG's ExploitRemoteService behavior.
 BLINE_EXPLOIT_TYPE = 0
 
+# CybORG exploit weights from ExploitRemoteService.py DefaultExploitActionSelector
+# Higher weight = higher priority (75% chance of picking top weight)
+# Exploit indices: 0=SSH, 1=FTP, 2=HTTP, 3=HTTPS, 4=SMTP, 5=SQL, 6=SMB, 7=RDP
+EXPLOIT_WEIGHTS = jnp.array([
+    0.1,  # SSHBruteForce
+    7.0,  # FTPDirectoryTraversal
+    3.0,  # HTTPRFI
+    4.0,  # HTTPSRFI
+    6.0,  # HarakaRCE
+    5.0,  # SQLInjection
+    2.0,  # EternalBlue
+    1.0,  # BlueKeep
+])
 
-def _get_host_first_exploit(host_idx: chex.Array, const: CageConst) -> chex.Array:
-    """Get the first available exploit for a host based on its initial services.
+# Probability of selecting the top-weighted exploit (CybORG: odds_of_top_choice = 0.75)
+TOP_CHOICE_PROBABILITY = 0.75
 
-    CybORG's ExploitRemoteService selects an exploit that matches the target's
-    services. This function computes the first valid exploit for a given host.
+
+def _get_host_exploit_probabilistic(
+    host_idx: chex.Array, const: CageConst, key: chex.PRNGKey
+) -> chex.Array:
+    """Get exploit for a host using CybORG's probabilistic selection.
+
+    CybORG's ExploitRemoteService.DefaultExploitActionSelector:
+    - Builds list of available exploits based on host's services
+    - If multiple exploits available: 75% pick top weight, 25% pick random other
+    - If one exploit available: use it
+    - If no exploits available: return 0 (fallback)
     """
     services = const.initial_services[host_idx]  # (num_services,)
 
-    # For each exploit, check if the host has a service that's vulnerable to it
+    # Check which exploits are available based on host's services
     def check_exploit(exploit_idx):
-        # Check all services to see if any is vulnerable to this exploit
         has_service = jnp.any(services & const.service_exploits[:, exploit_idx])
         return has_service
 
-    # Check exploits in order and find first valid one
     exploit_available = jax.vmap(check_exploit)(jnp.arange(const.num_exploits))
-    # Return first available exploit (default to 0 if none found)
-    first_exploit = jnp.argmax(exploit_available)
-    return first_exploit
+    num_available = jnp.sum(exploit_available)
+
+    # Get weights for available exploits (0 for unavailable)
+    available_weights = jnp.where(exploit_available, EXPLOIT_WEIGHTS, 0.0)
+
+    # Find the top-weighted exploit
+    top_exploit = jnp.argmax(available_weights)
+    top_weight = available_weights[top_exploit]
+
+    # For "other" selection: sample from available exploits excluding top
+    # Set top exploit weight to 0 for sampling others
+    other_weights = jnp.where(
+        jnp.arange(const.num_exploits) == top_exploit,
+        0.0,
+        available_weights
+    )
+    # Normalize to get probabilities (handle case where all others are 0)
+    other_sum = jnp.sum(other_weights)
+    other_probs = jnp.where(other_sum > 0, other_weights / other_sum, 0.0)
+
+    # Sample random "other" exploit
+    key1, key2 = jax.random.split(key)
+    other_exploit = jax.random.choice(key1, const.num_exploits, p=other_probs)
+
+    # 75% chance top, 25% chance other (only if multiple available)
+    use_top = jax.random.uniform(key2) < TOP_CHOICE_PROBABILITY
+    selected = jnp.where(
+        num_available <= 1,
+        top_exploit,  # Only one available, use it
+        jnp.where(use_top, top_exploit, other_exploit)
+    )
+
+    # Fallback to 0 if no exploits available
+    return jnp.where(num_available > 0, selected, 0).astype(jnp.int32)
 
 # Max FSM state (0-14, 15 total states)
 BLINE_MAX_STATE = 14
@@ -131,7 +182,7 @@ def bline_get_action(
         red_obs: Red agent observation (first element is last_action_success)
         action_mask: Valid action mask
         const: Environment constants
-        key: Random key (unused, for API compatibility)
+        key: Random key for probabilistic exploit selection
 
     Returns:
         Tuple of (action_index, new_agent_state)
@@ -154,7 +205,8 @@ def bline_get_action(
     # Get action for the new FSM state (pass agent_state for random user target)
     # CybORG's B_lineAgent doesn't check action masks - it just tries actions
     # and they succeed/fail based on game rules
-    action = _fsm_state_to_action(new_fsm_state, const, agent_state.target_user_idx)
+    # Exploit selection is probabilistic matching CybORG's DefaultExploitActionSelector
+    action = _fsm_state_to_action(new_fsm_state, const, agent_state.target_user_idx, key)
 
     new_agent_state = BLineState(
         fsm_state=new_fsm_state,
@@ -165,7 +217,9 @@ def bline_get_action(
     return action, new_agent_state
 
 
-def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_idx: chex.Array) -> chex.Array:
+def _fsm_state_to_action(
+    fsm_state: chex.Array, const: CageConst, target_user_idx: chex.Array, key: chex.PRNGKey
+) -> chex.Array:
     """Map FSM state to Red action index.
 
     Action encoding for Red (from actions.py):
@@ -182,6 +236,9 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
     CybORG's B_lineAgent randomly selects which User host to attack. The target_user_idx
     selects from bline_user_hosts (User1-4), and the connected Enterprise is looked up
     from user_to_enterprise mapping.
+
+    Exploit selection is probabilistic matching CybORG's DefaultExploitActionSelector:
+    75% chance of picking top-weighted exploit, 25% chance of picking another available one.
     """
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
@@ -196,6 +253,9 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
     user_subnet = const.host_subnet[user_host]
     enterprise_subnet = const.host_subnet[enterprise1]
 
+    # Split key for each potential exploit selection
+    keys = jax.random.split(key, 4)
+
     def state_0(_):  # DiscoverRemoteSystems(User subnet)
         return discover_start + user_subnet
 
@@ -203,7 +263,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + user_host
 
     def state_2(_):  # Exploit(User1)
-        exploit_type = _get_host_first_exploit(user_host, const)
+        exploit_type = _get_host_exploit_probabilistic(user_host, const, keys[0])
         return exploit_start + user_host * const.num_exploits + exploit_type
 
     def state_3(_):  # PrivEsc(User1)
@@ -213,7 +273,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + enterprise1
 
     def state_5(_):  # Exploit(Enterprise1)
-        exploit_type = _get_host_first_exploit(enterprise1, const)
+        exploit_type = _get_host_exploit_probabilistic(enterprise1, const, keys[1])
         return exploit_start + enterprise1 * const.num_exploits + exploit_type
 
     def state_6(_):  # PrivEsc(Enterprise1)
@@ -226,7 +286,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + enterprise2
 
     def state_9(_):  # Exploit(Enterprise2)
-        exploit_type = _get_host_first_exploit(enterprise2, const)
+        exploit_type = _get_host_exploit_probabilistic(enterprise2, const, keys[2])
         return exploit_start + enterprise2 * const.num_exploits + exploit_type
 
     def state_10(_):  # PrivEsc(Enterprise2)
@@ -236,7 +296,7 @@ def _fsm_state_to_action(fsm_state: chex.Array, const: CageConst, target_user_id
         return scan_start + op_server0
 
     def state_12(_):  # Exploit(Op_Server0)
-        exploit_type = _get_host_first_exploit(op_server0, const)
+        exploit_type = _get_host_exploit_probabilistic(op_server0, const, keys[3])
         return exploit_start + op_server0 * const.num_exploits + exploit_type
 
     def state_13(_):  # PrivEsc(Op_Server0)
