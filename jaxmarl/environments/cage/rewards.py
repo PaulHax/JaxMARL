@@ -29,8 +29,8 @@ def compute_rewards(
     - Red gets availability only for operational hosts where Impact has stopped OT service
     - Blue reward is negative of Red's (zero-sum base)
     - Blue pays additional cost for Restore actions (CybORG Restore.cost = -1)
-    - Blue pays -0.1 penalty for failed actions (CybORG InvalidAction.cost = -0.1)
-      Failed actions: Remove without detected activity, Decoy on occupied port/wrong OS/already deployed
+    - Blue pays -0.1 penalty for failed Remove actions only
+      (CybORG does NOT penalize failed Decoys - they fail silently with cost=0)
 
     Returns:
         Dict with 'blue' and 'red' reward scalars.
@@ -61,12 +61,11 @@ def compute_rewards(
     blue_reward = blue_reward + jnp.where(is_restore, BLUE_RESTORE_COST, 0.0)
 
     # Failed action penalty (CybORG InvalidAction.cost = -0.1)
-    # Applied when Remove or Decoy action fails (tracked in state.last_blue_action_success)
-    blue_reward = blue_reward + jnp.where(
-        state.last_blue_action_success,
-        0.0,
-        BLUE_INVALID_ACTION_COST
-    )
+    # Only applied for failed Remove actions - CybORG does NOT penalize failed Decoys
+    # (Decoys fail silently with cost=0 when port/OS incompatible)
+    is_remove = (blue_action >= remove_start) & (blue_action < decoy_start)
+    remove_failed = is_remove & ~state.last_blue_action_success
+    blue_reward = blue_reward + jnp.where(remove_failed, BLUE_INVALID_ACTION_COST, 0.0)
 
     return {
         'blue': blue_reward,
