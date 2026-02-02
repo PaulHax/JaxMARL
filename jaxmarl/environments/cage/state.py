@@ -106,8 +106,9 @@ class CageState:
     cumulative_red_reward: chex.Array   # scalar float
     cumulative_blue_reward: chex.Array  # scalar float
 
-    # Last action success (for observations)
+    # Last action success (for observations and reward calculation)
     last_red_action_success: chex.Array  # scalar bool
+    last_blue_action_success: chex.Array  # scalar bool: False triggers -0.1 penalty (CybORG InvalidAction.cost)
 
     # Impact tracking - OT service stopped on operational hosts
     ot_service_stopped: chex.Array     # (max_hosts,) bool: OT service stopped by Impact
@@ -370,6 +371,7 @@ def create_initial_state(const: CageConst) -> CageState:
         cumulative_red_reward=jnp.array(0.0),
         cumulative_blue_reward=jnp.array(0.0),
         last_red_action_success=jnp.array(False),
+        last_blue_action_success=jnp.array(True),  # True by default, set False on failed actions
         ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),

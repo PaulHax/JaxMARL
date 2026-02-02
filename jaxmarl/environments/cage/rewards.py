@@ -13,6 +13,7 @@ from jaxmarl.environments.cage.state import (
 CONFIDENTIALITY_SCALE = 1.0
 AVAILABILITY_SCALE = 1.0
 BLUE_RESTORE_COST = -1.0  # CybORG Restore.cost = -1
+BLUE_INVALID_ACTION_COST = -0.1  # CybORG InvalidAction.cost = -0.1
 
 
 def compute_rewards(
@@ -28,6 +29,8 @@ def compute_rewards(
     - Red gets availability only for operational hosts where Impact has stopped OT service
     - Blue reward is negative of Red's (zero-sum base)
     - Blue pays additional cost for Restore actions (CybORG Restore.cost = -1)
+    - Blue pays -0.1 penalty for failed actions (CybORG InvalidAction.cost = -0.1)
+      Failed actions: Remove without detected activity, Decoy on occupied port/wrong OS/already deployed
 
     Returns:
         Dict with 'blue' and 'red' reward scalars.
@@ -56,6 +59,14 @@ def compute_rewards(
     # Restore actions are at the end: [restore_start, action_space_size)
     is_restore = (blue_action >= restore_start) & (blue_action < action_space_size)
     blue_reward = blue_reward + jnp.where(is_restore, BLUE_RESTORE_COST, 0.0)
+
+    # Failed action penalty (CybORG InvalidAction.cost = -0.1)
+    # Applied when Remove or Decoy action fails (tracked in state.last_blue_action_success)
+    blue_reward = blue_reward + jnp.where(
+        state.last_blue_action_success,
+        0.0,
+        BLUE_INVALID_ACTION_COST
+    )
 
     return {
         'blue': blue_reward,
