@@ -10,9 +10,11 @@ from jaxmarl.environments.cage.state import (
 )
 from jaxmarl.environments.cage.rewards import (
     compute_rewards, compute_rewards_simple, get_max_red_reward,
-    CONFIDENTIALITY_SCALE, AVAILABILITY_SCALE, BLUE_RESTORE_COST,
+    CONFIDENTIALITY_SCALE, AVAILABILITY_SCALE, BLUE_RESTORE_COST, BLUE_INVALID_ACTION_COST,
 )
-from jaxmarl.environments.cage.actions import BLUE_SLEEP, BLUE_RESTORE_START
+from jaxmarl.environments.cage.actions import (
+    BLUE_SLEEP, BLUE_RESTORE_START, BLUE_REMOVE_START, BLUE_DECOY_START,
+)
 
 
 @pytest.fixture
@@ -143,6 +145,37 @@ class TestActionCosts:
         rewards = compute_rewards(initial_state, const, sleep_action, red_sleep)
 
         assert rewards['blue'] == 0.0  # No compromise, no cost
+
+    def test_failed_action_penalty(self, const, initial_state):
+        """Failed Remove/Decoy actions incur -0.1 penalty (CybORG InvalidAction.cost)."""
+        state = initial_state.replace(last_blue_action_success=jnp.array(False))
+        sleep_action = jnp.array(BLUE_SLEEP)
+        red_sleep = jnp.array(0)
+
+        rewards = compute_rewards(state, const, sleep_action, red_sleep)
+
+        assert rewards['blue'] == BLUE_INVALID_ACTION_COST
+
+    def test_successful_action_no_penalty(self, const, initial_state):
+        """Successful actions don't incur invalid action penalty."""
+        state = initial_state.replace(last_blue_action_success=jnp.array(True))
+        sleep_action = jnp.array(BLUE_SLEEP)
+        red_sleep = jnp.array(0)
+
+        rewards = compute_rewards(state, const, sleep_action, red_sleep)
+
+        assert rewards['blue'] == 0.0
+
+    def test_restore_plus_failed_action_costs_stack(self, const, initial_state):
+        """Restore cost and failed action penalty can stack."""
+        state = initial_state.replace(last_blue_action_success=jnp.array(False))
+        restore_action = jnp.array(BLUE_RESTORE_START + HOST_IDS['Enterprise0'])
+        red_sleep = jnp.array(0)
+
+        rewards = compute_rewards(state, const, restore_action, red_sleep)
+
+        expected = BLUE_RESTORE_COST + BLUE_INVALID_ACTION_COST
+        assert jnp.isclose(rewards['blue'], expected)
 
 
 class TestMaxReward:

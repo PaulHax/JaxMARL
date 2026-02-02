@@ -113,6 +113,10 @@ class CageState:
     # Impact tracking - OT service stopped on operational hosts
     ot_service_stopped: chex.Array     # (max_hosts,) bool: OT service stopped by Impact
 
+    # OT service discovery - Red learns about OT service when doing PrivilegeEscalate on operational host
+    # CybORG: PrivilegeEscalate runs ExploreHost which finds OTService process, enabling Impact
+    red_knows_ot_service: chex.Array   # (max_hosts,) bool: Red discovered OT service on this host
+
     # Activity detection - tracks if suspicious activity was detected (for Remove)
     host_activity_detected: chex.Array  # (max_hosts,) bool: activity detected by Monitor/Analyse
 
@@ -373,6 +377,7 @@ def create_initial_state(const: CageConst) -> CageState:
         last_red_action_success=jnp.array(False),
         last_blue_action_success=jnp.array(True),  # True by default, set False on failed actions
         ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_knows_ot_service=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
         red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.int32),

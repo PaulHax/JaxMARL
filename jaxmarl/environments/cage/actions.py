@@ -551,7 +551,7 @@ def apply_red_action(
     key, subkey = jax.random.split(key)
     state = jax.lax.cond(
         action_type == 4,  # PrivilegeEscalate
-        lambda s: _apply_privesc(s, target_host, subkey),
+        lambda s: _apply_privesc(s, target_host, const, subkey),
         lambda s: s,
         state,
     )
@@ -655,7 +655,7 @@ def _apply_exploit(
     Detection: 95% of successful exploits generate detectable activity (matching CybORG).
     The remaining 5% succeed silently - Blue cannot detect them even with Monitor.
 
-    CybORG behavior: Exploit does NOT require prior scan - just routing access.
+    CybORG behavior: Exploit requires prior DiscoverNetworkServices (scan) to know open ports.
     """
     num_hosts = const.num_hosts
     num_subnets = const.num_subnets
@@ -689,9 +689,10 @@ def _apply_exploit(
     # This makes decoys useful on hosts that DON'T have the vulnerable service
     has_target = has_vulnerable_service | decoy_present
 
-    # Exploit succeeds ONLY if real service exists AND no decoy blocks
-    # If only decoy exists (no real service), exploit fails (honeypot caught Red)
-    success = has_route & has_vulnerable_service & ~decoy_present
+    # Exploit succeeds ONLY if: scanned, real service exists, no decoy blocks
+    # CybORG requires DiscoverNetworkServices first to populate known ports
+    host_scanned = state.red_scanned_hosts_jax[target_host]
+    success = host_scanned & has_route & has_vulnerable_service & ~decoy_present
 
     # FTPDirectoryTraversal(1), HarakaRCE(4), SQLInjection(5), EternalBlue(6), BlueKeep(7) give root
     # Exception: BlueKeep on User2 gives NetworkService (user-level) due to RDP process user
@@ -747,12 +748,14 @@ def _apply_exploit(
     )
 
 
-def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> CageState:
+def _apply_privesc(state: CageState, target_host: int, const: CageConst, key: chex.PRNGKey) -> CageState:
     """Escalate privileges on target host.
 
     CybORG behavior: PrivilegeEscalate is deterministic - if Red has a user session
     and the OS is compatible with the escalation method (JuicyPotato for Windows,
     V4L2KernelExploit for Linux), escalation always succeeds.
+
+    Also runs ExploreHost which discovers OTService on operational hosts, enabling Impact.
     """
     has_user_session = state.red_privilege[target_host] >= COMPROMISE_USER
 
@@ -777,19 +780,29 @@ def _apply_privesc(state: CageState, target_host: int, key: chex.PRNGKey) -> Cag
         state.host_has_malware[target_host],
     )
 
+    # CybORG: PrivilegeEscalate runs ExploreHost which discovers OTService on operational hosts
+    is_operational = const.operational_targets[target_host]
+    discovers_ot = success & is_operational
+    new_knows_ot = jnp.where(discovers_ot, True, state.red_knows_ot_service[target_host])
+
     return state.replace(
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
         host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
+        red_knows_ot_service=state.red_knows_ot_service.at[target_host].set(new_knows_ot),
         last_red_action_success=success,
     )
 
 
 def _apply_impact(state: CageState, target_host: int, const: CageConst) -> CageState:
-    """Impact action on operational host - stops OT service."""
+    """Impact action on operational host - stops OT service.
+
+    CybORG behavior: Impact requires Red to have discovered the OT service first,
+    which happens during PrivilegeEscalate's ExploreHost on operational hosts.
+    """
     has_privileged = state.red_privilege[target_host] >= COMPROMISE_PRIVILEGED
-    is_operational = const.operational_targets[target_host]
-    success = has_privileged & is_operational
+    knows_ot_service = state.red_knows_ot_service[target_host]
+    success = has_privileged & knows_ot_service
 
     new_ot_stopped = jnp.where(
         success,
