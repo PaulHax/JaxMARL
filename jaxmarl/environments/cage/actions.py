@@ -260,8 +260,35 @@ def decode_red_action(action: int, const: CageConst) -> Tuple[chex.Array, chex.A
 
 
 def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) -> CageState:
-    """Apply blue agent action to state."""
+    """Apply blue agent action to state.
+
+    Tracks action success in state.last_blue_action_success:
+    - Sleep, Monitor, Analyse, Restore: Always succeed
+    - Remove: Succeeds only if activity was detected AND access is user-level (not privileged)
+    - Decoy: Succeeds only if port is available AND OS is compatible
+
+    Failed actions get -0.1 penalty in compute_rewards (matching CybORG InvalidAction.cost).
+    """
     action_type, target_host, decoy_type = decode_blue_action(action, const)
+
+    # Compute success BEFORE applying action (need original state for Remove/Decoy checks)
+    # Remove success: activity detected AND user-level access (not privileged)
+    remove_success = (
+        state.host_activity_detected[target_host] &
+        (state.red_privilege[target_host] == COMPROMISE_USER)
+    )
+
+    # Decoy success: not already deployed AND port available AND OS compatible
+    already_deployed = state.host_decoys[target_host, decoy_type]
+    conflict1 = DECOY_SERVICE_CONFLICTS[decoy_type, 0]
+    conflict2 = DECOY_SERVICE_CONFLICTS[decoy_type, 1]
+    has_conflict1 = jnp.where(conflict1 >= 0, state.host_services[target_host, conflict1], False)
+    has_conflict2 = jnp.where(conflict2 >= 0, state.host_services[target_host, conflict2], False)
+    port_available = ~has_conflict1 & ~has_conflict2
+    required_os = DECOY_OS_ARRAY[decoy_type]
+    host_os = const.host_os[target_host]
+    os_compatible = (required_os == OS_ANY) | (required_os == host_os)
+    decoy_success = ~already_deployed & port_available & os_compatible
 
     # Monitor (action_type == 1): detect activity on all hosts, clear unknown flags
     state = jax.lax.cond(
@@ -299,6 +326,21 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
         lambda s: s,
         state,
     )
+
+    # Determine overall action success
+    # Sleep(0), Monitor(1), Analyse(2), Restore(4) always succeed
+    # Remove(3) and Decoy(5) can fail
+    action_success = jnp.where(
+        action_type == 3,  # Remove
+        remove_success,
+        jnp.where(
+            action_type == 5,  # Decoy
+            decoy_success,
+            True  # All other actions succeed
+        )
+    )
+
+    state = state.replace(last_blue_action_success=action_success)
 
     return state
 
