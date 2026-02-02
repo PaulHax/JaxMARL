@@ -438,7 +438,7 @@ def meander_get_action(
 
     discover_start, scan_start, exploit_start, privesc_start, impact_start = get_red_action_offsets(const)
 
-    key, k1, k2, k3, k4 = jax.random.split(key, 5)
+    key, k1, k2, k3, k4, k5 = jax.random.split(key, 6)
 
     op_server0 = const.bline_op_server0
     can_impact = agent_state.escalated_hosts[op_server0]
@@ -543,14 +543,18 @@ def meander_get_action(
 
                 def try_exploit_or_sleep(_):
                     host_perm_exploit = jax.random.permutation(k4, const.num_hosts)
+                    # Pre-generate keys for probabilistic exploit selection (one per host)
+                    exploit_keys = jax.random.split(k5, const.num_hosts)
 
-                    def find_exploit_host(carry, host_idx):
+                    def find_exploit_host(carry, inputs):
+                        host_idx, exploit_key = inputs
                         found, action, state = carry
                         host = host_perm_exploit[host_idx]
                         is_scanned = state.scanned_ips[host]
                         is_not_exploited = ~state.exploited_ips[host]
 
-                        exploit_type = _get_host_first_exploit(host, const)
+                        # Use probabilistic exploit selection matching CybORG
+                        exploit_type = _get_host_exploit_probabilistic(host, const, exploit_key)
                         exploit_action_idx = exploit_start + host * const.num_exploits + exploit_type
                         is_valid = action_mask[exploit_action_idx]
 
@@ -573,7 +577,7 @@ def meander_get_action(
                     (found_exploit, exploit_action, state_after_exploit), _ = jax.lax.scan(
                         find_exploit_host,
                         (False, jnp.array(0, dtype=jnp.int32), state_after_privesc),
-                        jnp.arange(const.num_hosts),
+                        (jnp.arange(const.num_hosts), exploit_keys),
                     )
 
                     def do_exploit(_):
