@@ -19,17 +19,17 @@ from jaxmarl.environments.cage.actions import (
     get_blue_action_offsets, get_red_action_offsets,
 )
 
-from tests.differential.action_translator import (
+from tests.cage.differential.action_translator import (
     describe_jax_blue_action,
     describe_jax_red_action,
     get_host_mappings,
     get_subnet_mappings,
 )
-from tests.differential.state_comparator import (
+from tests.cage.differential.state_comparator import (
     extract_jax_state,
     get_host_ids,
 )
-from tests.differential.harness import DifferentialHarness, sleep_policy
+from tests.cage.differential.harness import DifferentialHarness, sleep_policy
 
 
 SCENARIO_HOST_COUNTS = {

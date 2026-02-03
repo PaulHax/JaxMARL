@@ -350,17 +350,18 @@ class TestImpactAction:
         assert not ot_stopped, "Impact should fail without PRIVILEGED access"
 
     def test_impact_with_privileged_access(self):
-        """Impact should succeed with PRIVILEGED access."""
+        """Impact should succeed with PRIVILEGED access and OT service knowledge."""
         env = CageEnv()
         key = jax.random.PRNGKey(42)
         _, state = env.reset(key)
 
         target_idx = HOST_IDS['Op_Server0']
 
-        # Give privileged access (set red_privilege, not host_compromised)
+        # Give privileged access and OT service knowledge (discovered during PrivilegeEscalate)
         state = state.replace(
             red_privilege=state.red_privilege.at[target_idx].set(COMPROMISE_PRIVILEGED),
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[target_idx].set(True),
+            red_knows_ot_service=state.red_knows_ot_service.at[target_idx].set(True),
         )
 
         # Try impact

@@ -17,14 +17,14 @@ from jaxmarl.environments.cage.actions import (
     RED_SLEEP,
 )
 
-from tests.differential.harness import (
+from tests.cage.differential.harness import (
     DifferentialHarness, is_cyborg_available, sleep_policy,
 )
-from tests.differential.state_comparator import StateSnapshot
-from tests.comparison.policies import (
+from tests.cage.differential.state_comparator import StateSnapshot
+from tests.cage.comparison.policies import (
     scripted_blue_policy_factory,
 )
-from tests.comparison.scenarios import (
+from tests.cage.comparison.scenarios import (
     blue_remove_host, blue_restore_host, blue_decoy_host,
     DECOY_SSHD, DECOY_APACHE, DECOY_HARAKA,
 )
@@ -94,7 +94,7 @@ class TestSessionManagement:
 
     def test_remove_clears_user_session(self):
         """Remove should clear user-level sessions."""
-        from tests.comparison.policies import react_remove_policy_with_timing
+        from tests.cage.comparison.policies import react_remove_policy_with_timing
 
         harness = DifferentialHarness(seed=42, max_steps=25, verbose=False)
         remove_policy = react_remove_policy_with_timing(delay=0)
@@ -219,7 +219,7 @@ class TestRemoveEdgeCases:
 
     def test_remove_after_monitor(self):
         """Remove after monitor should work on compromised host."""
-        from tests.comparison.policies import react_remove_policy_with_timing
+        from tests.cage.comparison.policies import react_remove_policy_with_timing
 
         harness = DifferentialHarness(seed=42, max_steps=30, verbose=False)
         remove_policy = react_remove_policy_with_timing(delay=0)

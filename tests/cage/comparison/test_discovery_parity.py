@@ -5,9 +5,9 @@ vs requiring explicit Scan.
 """
 
 import pytest
-from tests.differential.harness import DifferentialHarness, is_cyborg_available
-from tests.comparison.policies import scripted_red_policy_factory, sleep_policy
-from tests.comparison.scenarios import (
+from tests.cage.differential.harness import DifferentialHarness, is_cyborg_available
+from tests.cage.comparison.policies import scripted_red_policy_factory, sleep_policy
+from tests.cage.comparison.scenarios import (
     red_discover_subnet, red_scan_host, red_exploit_host, red_privesc_host,
     SUBNET_USER, EXPLOIT_SSH,
 )

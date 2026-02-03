@@ -15,12 +15,12 @@ from jaxmarl.environments.cage.state import (
 )
 from jaxmarl.environments.cage.actions import BLUE_SLEEP, BLUE_MONITOR, RED_SLEEP
 
-from tests.differential.harness import (
+from tests.cage.differential.harness import (
     DifferentialHarness, is_cyborg_available, sleep_policy, monitor_policy,
 )
-from tests.differential.state_comparator import StateSnapshot
-from tests.comparison.policies import scripted_blue_policy_factory
-from tests.comparison.scenarios import blue_restore_host
+from tests.cage.differential.state_comparator import StateSnapshot
+from tests.cage.comparison.policies import scripted_blue_policy_factory
+from tests.cage.comparison.scenarios import blue_restore_host
 
 
 requires_cyborg = pytest.mark.skipif(

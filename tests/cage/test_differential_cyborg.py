@@ -24,14 +24,14 @@ from jaxmarl.environments.cage.actions import (
     get_red_action_offsets,
 )
 
-from tests.differential.harness import (
+from tests.cage.differential.harness import (
     DifferentialHarness, JaxOnlyHarness, is_cyborg_available,
     sleep_policy, monitor_policy,
     reactive_remove_policy, reactive_restore_policy,
     scripted_red_policy_factory,
 )
-from tests.differential.state_comparator import StateSnapshot
-from tests.differential.action_translator import describe_jax_red_action
+from tests.cage.differential.state_comparator import StateSnapshot
+from tests.cage.differential.action_translator import describe_jax_red_action
 
 
 requires_cyborg = pytest.mark.skipif(

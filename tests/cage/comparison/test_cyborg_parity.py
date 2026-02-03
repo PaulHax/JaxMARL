@@ -25,16 +25,16 @@ from jaxmarl.environments.cage.actions import (
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
 )
 
-from tests.differential.harness import (
+from tests.cage.differential.harness import (
     DifferentialHarness, is_cyborg_available, sleep_policy, monitor_policy,
     reactive_remove_policy, reactive_restore_policy,
 )
-from tests.differential.state_comparator import StateSnapshot
-from tests.comparison.policies import (
+from tests.cage.differential.state_comparator import StateSnapshot
+from tests.cage.comparison.policies import (
     react_remove_policy_with_timing, react_restore_policy_with_timing,
     scripted_blue_policy_factory, scripted_red_policy_factory,
 )
-from tests.comparison.scenarios import (
+from tests.cage.comparison.scenarios import (
     red_discover_subnet, red_scan_host, red_exploit_host, red_privesc_host,
     red_impact_host, blue_decoy_host, blue_restore_host, blue_remove_host,
     blue_analyse_host,

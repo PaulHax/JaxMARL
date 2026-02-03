@@ -27,15 +27,15 @@ from jaxmarl.environments.cage.scripted_agents import (
     bline_reset, bline_get_action,
 )
 
-from tests.differential.harness import (
+from tests.cage.differential.harness import (
     JaxOnlyHarness, is_cyborg_available,
     sleep_policy, monitor_policy,
     reactive_remove_policy, reactive_restore_policy,
     random_blue_policy_factory, random_red_policy_factory,
     scripted_red_policy_factory,
 )
-from tests.differential.state_comparator import StateSnapshot
-from tests.differential.action_translator import describe_jax_red_action
+from tests.cage.differential.state_comparator import StateSnapshot
+from tests.cage.differential.action_translator import describe_jax_red_action
 
 
 requires_cyborg = pytest.mark.skipif(
@@ -413,7 +413,7 @@ class TestCybORGDifferential:
 
     @pytest.fixture
     def harness(self):
-        from tests.differential import DifferentialHarness
+        from tests.cage.differential import DifferentialHarness
         return DifferentialHarness(seed=42, max_steps=20, verbose=False)
 
     def test_cyborg_jax_state_match(self, harness):

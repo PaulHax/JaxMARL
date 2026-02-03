@@ -5,13 +5,13 @@ These tests verify reward and state parity for the Restore action.
 """
 
 import pytest
-from tests.differential.harness import DifferentialHarness, is_cyborg_available
-from tests.differential.state_comparator import COMPROMISE_USER
-from tests.comparison.policies import (
+from tests.cage.differential.harness import DifferentialHarness, is_cyborg_available
+from tests.cage.differential.state_comparator import COMPROMISE_USER
+from tests.cage.comparison.policies import (
     scripted_blue_policy_factory,
     scripted_red_policy_factory,
 )
-from tests.comparison.scenarios import (
+from tests.cage.comparison.scenarios import (
     red_discover_subnet,
     red_scan_host,
     red_exploit_host,

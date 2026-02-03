@@ -5,12 +5,12 @@ that JAX produces matching rewards and state transitions.
 """
 
 import pytest
-from tests.differential.harness import DifferentialHarness, is_cyborg_available
-from tests.comparison.policies import (
+from tests.cage.differential.harness import DifferentialHarness, is_cyborg_available
+from tests.cage.comparison.policies import (
     scripted_blue_policy_factory,
     scripted_red_policy_factory,
 )
-from tests.comparison.scenarios import (
+from tests.cage.comparison.scenarios import (
     BLINE_KILLCHAIN_STANDARD,
     KILLCHAIN_VIA_ENTERPRISE0,
     KILLCHAIN_VIA_HARAKA,

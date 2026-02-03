@@ -335,7 +335,7 @@ class TestFullKillchainParity:
 
     def test_bline_killchain_step_by_step(self):
         """Execute B_line killchain using the differential harness."""
-        from tests.differential.harness import DifferentialHarness, sleep_policy
+        from tests.cage.differential.harness import DifferentialHarness, sleep_policy
 
         harness = DifferentialHarness(seed=42, max_steps=20, verbose=True)
         result = harness.run_bline_episode(sleep_policy, use_jax_bline=False)

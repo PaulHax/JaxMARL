@@ -7,15 +7,15 @@ equivalence across multiple seeds and agents.
 import pytest
 import numpy as np
 
-from tests.differential.harness import (
+from tests.cage.differential.harness import (
     DifferentialHarness, is_cyborg_available, sleep_policy, monitor_policy,
 )
-from tests.differential.state_comparator import StateSnapshot
-from tests.comparison.policies import (
+from tests.cage.differential.state_comparator import StateSnapshot
+from tests.cage.comparison.policies import (
     react_remove_policy_with_timing, react_restore_policy_with_timing,
     decoy_defense_policy,
 )
-from tests.comparison.scenarios import DECOY_SSHD
+from tests.cage.comparison.scenarios import DECOY_SSHD
 
 
 requires_cyborg = pytest.mark.skipif(

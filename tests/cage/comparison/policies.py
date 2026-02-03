@@ -15,7 +15,7 @@ from jaxmarl.environments.cage.actions import (
     RED_EXPLOIT_START, RED_PRIVESC_START, RED_IMPACT_START,
     NUM_BLUE_ACTIONS, NUM_RED_ACTIONS, NUM_HOSTS, NUM_EXPLOITS,
 )
-from tests.differential.state_comparator import StateSnapshot
+from tests.cage.differential.state_comparator import StateSnapshot
 
 
 def sleep_policy(state: StateSnapshot, step: int) -> int:
