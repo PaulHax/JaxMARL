@@ -117,10 +117,10 @@ class CageState:
     # CybORG: PrivilegeEscalate runs ExploreHost which finds OTService process, enabling Impact
     red_knows_ot_service: chex.Array   # (max_hosts,) bool: Red discovered OT service on this host
 
-    # Activity detection - tracks if suspicious activity was detected (for Remove)
-    host_activity_detected: chex.Array  # (max_hosts,) bool: activity detected by Monitor/Analyse
+    # Activity detection - tracks if exploit activity was detected by Monitor (for Remove)
+    host_activity_detected: chex.Array  # (max_hosts,) bool: exploit activity detected by Monitor
 
-    # Unknown observation state - set after Remove, cleared by Monitor/Analyse
+    # Unknown observation state - set after Remove, cleared when new evidence arrives (e.g., Analyse malware)
     host_observation_unknown: chex.Array  # (max_hosts,) bool: observation should show "Unknown"
 
     # Red activity this step - tracks activity TYPE on each host for Blue observations
@@ -319,16 +319,24 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
     bline_op_server0 = host_ids.get('Op_Server0', 7)
 
     # Build list of attackable User hosts (excluding User0 which is Red's foothold)
-    # CybORG's B_lineAgent randomly selects from discovered hosts in User subnet
-    user_host_names = ['User1', 'User2', 'User3', 'User4']
-    bline_user_hosts = jnp.array([host_ids.get(name, 0) for name in user_host_names], dtype=jnp.int32)
+    # CybORG's B_lineAgent randomly selects from discovered hosts in User subnet.
+    user_host_names = sorted(
+        [h.name for h in config.hosts if h.name.startswith('User') and h.name != 'User0']
+    )
+    bline_user_hosts = jnp.array(
+        [host_ids.get(name, 0) for name in user_host_names], dtype=jnp.int32
+    )
 
-    # User→Enterprise mapping: CybORG's B_lineAgent picks the first Enterprise
-    # alphabetically (Enterprise0), regardless of which User host was attacked.
-    # This matches the observed CybORG behavior where it uses:
-    #   self.enterprise_host = [x for x in observation if 'Enterprise' in x][0]
+    # User→Enterprise mapping: derived from scenario connectivity.
+    # If not provided, default to Enterprise0 for all users.
     enterprise0_idx = host_ids.get('Enterprise0', 1)
-    user_to_enterprise = jnp.array([enterprise0_idx] * len(user_host_names), dtype=jnp.int32)
+    mapping = getattr(config, "user_to_enterprise", {}) or {}
+    enterprise_indices = []
+    for user_name in user_host_names:
+        ent_name = mapping.get(user_name)
+        ent_idx = host_ids.get(ent_name, enterprise0_idx) if ent_name else enterprise0_idx
+        enterprise_indices.append(ent_idx)
+    user_to_enterprise = jnp.array(enterprise_indices, dtype=jnp.int32)
 
     # Subnet indices for dynamic host identification
     enterprise_subnet_idx = subnet_ids.get('Enterprise', 0)

@@ -5,6 +5,9 @@ Blue agent observations after various scenarios.
 """
 
 import pytest
+import random
+import numpy as np
+import jax
 from tests.cage.differential.harness import (
     DifferentialHarness,
     is_cyborg_available,
@@ -24,9 +27,11 @@ from tests.cage.comparison.scenarios import (
     blue_restore_host,
     SUBNET_USER,
     EXPLOIT_SSH,
+    EXPLOIT_ETERNAL,
     BLINE_KILLCHAIN_STANDARD,
 )
 from jaxmarl.environments.cage.actions import BLUE_MONITOR
+from jaxmarl.environments.cage.state import HOST_IDS
 
 
 requires_cyborg = pytest.mark.skipif(
@@ -56,7 +61,6 @@ class TestObservationParity:
         assert abs(initial_step.cyborg_state.reward_blue - initial_step.jax_state.reward_blue) < 0.02, \
             f"Blue reward mismatch: CybORG={initial_step.cyborg_state.reward_blue}, JAX={initial_step.jax_state.reward_blue}"
 
-    @pytest.mark.xfail(reason="Known mismatch at blue_obs index 22 (Op_Host1 compromised_0)")
     def test_blue_obs_index_22_parity(self):
         """Targeted parity check for Blue obs index 22 (Op_Host1 compromised_0)."""
         harness = DifferentialHarness(seed=42, max_steps=1, check_obs=True, verbose=False)
@@ -73,6 +77,77 @@ class TestObservationParity:
         assert abs(cyborg_val - jax_val) < 1e-6, (
             f"blue_obs[22] mismatch: CybORG={cyborg_val}, JAX={jax_val}"
         )
+
+    def test_user2_remove_observation_parity_without_detection(self, monkeypatch):
+        """CybORG vs JAX: User2 observation parity when exploit detection is disabled."""
+        from CybORG import CybORG
+        from CybORG.Agents.Wrappers import BlueTableWrapper
+        from CybORG.Shared.Actions.ConcreteActions.ExploitAction import ExploitAction
+        from tests.cage.differential.action_translator import jax_action_to_cyborg
+        from jaxmarl.environments.cage import CageEnv
+        import jaxmarl.environments.cage.actions as jax_actions
+        import inspect
+
+        # Force exploit detection to fail in both envs for deterministic parity
+        orig_init = ExploitAction.__init__
+
+        def patched_init(self, *args, **kwargs):
+            orig_init(self, *args, **kwargs)
+            self.detection_rate = 0.0
+
+        monkeypatch.setattr(ExploitAction, "__init__", patched_init)
+        monkeypatch.setattr(jax_actions, "EXPLOIT_DETECTION_RATE", 0.0)
+
+        seed = 123
+        random.seed(seed)
+
+        path = str(inspect.getfile(CybORG))
+        path = path[:-10] + "/Shared/Scenarios/Scenario2.yaml"
+        cyborg = CybORG(path, "sim")
+        cyborg.reset()
+        cyborg.set_seed(seed)
+
+        blue_wrapper = BlueTableWrapper(env=cyborg, output_mode="vector")
+        blue_wrapper.reset("Blue")
+
+        with jax.disable_jit():
+            jax_env = CageEnv()
+            key = jax.random.PRNGKey(seed)
+            obs_jax, state = jax_env.reset(key)
+
+            red_actions = [
+                red_discover_subnet(SUBNET_USER),
+                red_scan_host("User2"),
+                red_exploit_host("User2", EXPLOIT_ETERNAL),
+            ]
+
+            for red_action in red_actions:
+                cyborg.step("Blue", jax_action_to_cyborg(0, cyborg, "Blue"))
+                cyborg.step("Red", jax_action_to_cyborg(red_action, cyborg, "Red"))
+
+                key, subkey = jax.random.split(key)
+                obs_jax, state, _, _, _ = jax_env.step_env(
+                    subkey, state, {"blue": 0, "red": red_action}
+                )
+
+            blue_remove = blue_remove_host("User2")
+            cyborg.step("Blue", jax_action_to_cyborg(blue_remove, cyborg, "Blue"))
+            cyborg.step("Red", jax_action_to_cyborg(0, cyborg, "Red"))
+            obs_cyb = blue_wrapper.observation_change(cyborg.get_observation("Blue"))
+
+            key, subkey = jax.random.split(key)
+            obs_jax, state, _, _, _ = jax_env.step_env(
+                subkey, state, {"blue": blue_remove, "red": 0}
+            )
+
+            # Compare User2 activity/compromise bits after Remove
+            base = HOST_IDS["User2"] * 4
+            cyb_user2 = obs_cyb[base:base + 4]
+            jax_user2 = np.array(obs_jax["blue"][base:base + 4])
+
+            assert np.allclose(cyb_user2, jax_user2), (
+                f"User2 obs mismatch after Remove: CybORG={cyb_user2}, JAX={jax_user2}"
+            )
 
     def test_observation_after_exploit(self):
         """CybORG vs JAX: Observation after Red exploit."""

@@ -76,6 +76,9 @@ class ScenarioConfig:
     subnets: List[SubnetConfig]
     agents: List[AgentConfig]
     max_steps: int = 100
+    # Mapping of User hosts (excluding User0) to their connected Enterprise host.
+    # Used to align B_lineAgent behavior with CybORG scenario topology.
+    user_to_enterprise: Dict[str, str] = field(default_factory=dict)
 
     # Service and exploit definitions (shared across scenarios)
     services: List[str] = field(default_factory=lambda: [
@@ -256,12 +259,19 @@ def create_scalable_config(
         AgentConfig('Red', starting_host='User0', team='red'),
     ]
 
+    # Default User->Enterprise mapping: point all User{i>0} to Enterprise0
+    user_to_enterprise = {}
+    if num_enterprise > 0:
+        for i in range(1, num_users):
+            user_to_enterprise[f'User{i}'] = 'Enterprise0'
+
     return ScenarioConfig(
         name=name,
         hosts=hosts,
         subnets=subnets,
         agents=agents,
         max_steps=max_steps,
+        user_to_enterprise=user_to_enterprise,
     )
 
 
@@ -339,6 +349,7 @@ def create_multi_agent_config(
         subnets=base_config.subnets,
         agents=agents,
         max_steps=base_config.max_steps,
+        user_to_enterprise=base_config.user_to_enterprise,
         services=base_config.services,
         exploits=base_config.exploits,
         decoy_types=base_config.decoy_types,

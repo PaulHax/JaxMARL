@@ -54,8 +54,6 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
     initial_foothold_mask = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
     initial_foothold_mask = initial_foothold_mask.at[const.red_start_hosts].set(True)
 
-    has_session = state.red_sessions > 0
-
     # Activity encoding: None=[0,0], Scan=[1,0], Exploit=[1,1]
     # CybORG activity is TRANSIENT - only shows when specific actions occur THIS step
     # red_activity_this_step: 0=None, 1=Scan, 2=Exploit
@@ -69,14 +67,12 @@ def get_blue_obs(state: CageState, const: CageConst) -> chex.Array:
 
     # Compromised encoding: No=[0,0], User=[0,1], Priv=[1,1], Unknown=[1,0]
     # CybORG's BlueTableWrapper detects:
-    # - User: when shell connection detected (port 4444) → has_session
-    # - Privileged: when malware detected via Analyse (DensityScout) → host_malware_detected
-    # Note: Red may have higher actual privilege than Blue can observe
-    # Blue must use Analyse to detect malware; PrivEsc alone doesn't reveal Privileged
-    visible_session = has_session & ~initial_foothold_mask
-    malware_detected = state.host_malware_detected & ~initial_foothold_mask
-    compromised_0 = malware_detected.astype(jnp.float32)
-    compromised_1 = visible_session.astype(jnp.float32)
+    # - User: when exploit activity is observed (Monitor anomalies)
+    # - Privileged: when malware detected via Analyse (DensityScout)
+    detected_user = state.host_activity_detected & ~initial_foothold_mask
+    detected_priv = state.host_malware_detected & ~initial_foothold_mask
+    compromised_0 = detected_priv.astype(jnp.float32)
+    compromised_1 = (detected_user | detected_priv).astype(jnp.float32)
 
     # After Remove, compromised shows Unknown [1,0] until Restore
     compromised_0 = jnp.where(state.host_observation_unknown, 1.0, compromised_0)

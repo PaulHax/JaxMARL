@@ -21,6 +21,7 @@ from tests.cage.comparison.scenarios import (
     blue_analyse_host,
     SUBNET_USER,
     EXPLOIT_SSH,
+    EXPLOIT_ETERNAL,
     BLINE_KILLCHAIN_STANDARD,
 )
 from jaxmarl.environments.cage.actions import BLUE_MONITOR
@@ -91,6 +92,28 @@ class TestRewardValuesParity:
         ]
 
         blue_actions = [BLUE_MONITOR] * 7
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        blue_policy = scripted_blue_policy_factory(blue_actions)
+
+        result = harness.run_episode(blue_policy, red_policy)
+
+        for sr in result.step_results:
+            assert abs(sr.cyborg_state.reward_blue - sr.jax_state.reward_blue) < 0.02, \
+                f"Step {sr.step}: Blue reward mismatch CybORG={sr.cyborg_state.reward_blue}, JAX={sr.jax_state.reward_blue}"
+
+    def test_privileged_exploit_reward(self):
+        """CybORG vs JAX: Exploit that grants privileged access should incur confidentiality penalty."""
+        harness = DifferentialHarness(seed=42, max_steps=6, verbose=False)
+
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User2'),
+            red_exploit_host('User2', EXPLOIT_ETERNAL),  # EternalBlue grants SYSTEM on Windows
+            0,
+        ]
+
+        blue_actions = [BLUE_MONITOR] * 4
 
         red_policy = scripted_red_policy_factory(red_actions)
         blue_policy = scripted_blue_policy_factory(blue_actions)

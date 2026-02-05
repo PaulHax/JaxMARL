@@ -18,7 +18,7 @@ from jaxmarl.environments.cage.state import (
     create_initial_state_with_red_foothold, build_const_from_config,
 )
 from jaxmarl.environments.cage.actions import (
-    apply_blue_action, apply_red_action,
+    apply_blue_action, apply_red_action, apply_monitor_post_red,
     get_blue_action_mask, get_red_action_mask,
     compute_blue_action_space_size, compute_red_action_space_size,
     NUM_BLUE_ACTIONS, NUM_RED_ACTIONS,
@@ -162,8 +162,11 @@ class CageEnv(MultiAgentEnv):
             red_activity_this_step=jnp.zeros_like(state.red_activity_this_step)
         )
 
-        # Apply Red action (sets red_activity_this_step for next step's Monitor)
+        # Apply Red action (sets red_activity_this_step for this step's Monitor)
         state = apply_red_action(state, red_action, self.const, key_red)
+
+        # Monitor pass happens after Red acts in CybORG
+        state = apply_monitor_post_red(state, self.const)
 
         # Compute rewards
         rewards = compute_rewards(state, self.const, blue_action, red_action, self.resilience_gamma)

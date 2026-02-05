@@ -283,6 +283,9 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     - Decoy: Succeeds only if port is available AND OS is compatible
 
     Failed actions get -0.1 penalty in compute_rewards (matching CybORG InvalidAction.cost).
+
+    Note: Blue's Monitor pass is applied after Red acts in the environment step,
+    mirroring CybORG's end-of-step monitoring, so Monitor here behaves like Sleep.
     """
     action_type, target_host, decoy_type = decode_blue_action(action, const)
 
@@ -304,14 +307,6 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     host_os = const.host_os[target_host]
     os_compatible = (required_os == OS_ANY) | (required_os == host_os)
     decoy_success = ~already_deployed & port_available & os_compatible
-
-    # Monitor (action_type == 1): detect activity on all hosts, clear unknown flags
-    state = jax.lax.cond(
-        action_type == 1,  # Monitor
-        lambda s: _apply_monitor(s, const),
-        lambda s: s,
-        state,
-    )
 
     # Analyse (action_type == 2): detect activity on target host, clear unknown flag
     state = jax.lax.cond(
@@ -361,66 +356,43 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
 
 
 def _apply_monitor(state: CageState, const: CageConst) -> CageState:
-    """Monitor action: detect red activity on all hosts, clear unknown flags.
+    """Monitor pass after Red acts: update detection state from this step's activity.
 
-    CybORG behavior: Monitor detects process anomalies from Red's presence
-    (malware, backdoors, shells). Scan activity creates network connections
-    but not detectable processes. Only Exploit/PrivEsc create malware that
-    Monitor can detect. The initial foothold is hidden (part of baseline).
+    CybORG runs Monitor at the end of each timestep for Blue observations.
+    We only mark hosts where exploit-level activity was detected this step.
+    Unknown observations persist until new evidence arrives.
     """
-    # Detect recent exploit-level activity (Scan doesn't create detectable processes)
-    recent_activity = state.red_activity_this_step >= ACTIVITY_EXPLOIT
-
-    # Detect persistent Red presence (sessions), excluding initial foothold
-    # This matches what observations show to Blue
-    # Use zeros_like for JIT compatibility (can't use const.num_hosts directly in some contexts)
-    has_red_presence = state.red_sessions > 0
-    initial_foothold_mask = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
-    initial_foothold_mask = initial_foothold_mask.at[const.red_start_hosts].set(True)
-    visible_presence = has_red_presence & ~initial_foothold_mask
+    detected_exploit = state.red_activity_this_step == ACTIVITY_EXPLOIT
+    new_detected = state.host_activity_detected | detected_exploit
+    new_unknown = jnp.where(detected_exploit, False, state.host_observation_unknown)
 
     return state.replace(
-        host_activity_detected=state.host_activity_detected | recent_activity | visible_presence,
-        host_observation_unknown=jnp.zeros_like(state.host_observation_unknown),
+        host_activity_detected=new_detected,
+        host_observation_unknown=new_unknown,
     )
 
 
 def _apply_analyse(state: CageState, target_host: int, const: CageConst) -> CageState:
-    """Analyse action: detect activity and malware on target host, clear unknown flag.
+    """Analyse action: detect malware on target host.
 
-    CybORG behavior: Analyse runs DensityScout which detects malware files
-    (Density >= 0.9). This is the ONLY way Blue can see Privileged compromise.
-    Also detects persistent Red presence (sessions). Scan doesn't create
-    detectable malware, only Exploit/PrivEsc do.
+    CybORG behaviour: Analyse (DensityScout/SigCheck) reveals malware files.
+    It does not detect user-level sessions on its own. If malware is found,
+    it can clear an Unknown status for that host.
     """
-    # Detect recent exploit-level activity (Scan doesn't create malware)
-    has_recent_activity = state.red_activity_this_step[target_host] >= ACTIVITY_EXPLOIT
-    has_red_session = state.red_sessions[target_host] > 0
-
-    # Check if this is the initial foothold (hidden from Blue)
-    is_initial_foothold = jnp.any(const.red_start_hosts == target_host)
-    visible_presence = has_red_session & ~is_initial_foothold
-
-    should_detect = has_recent_activity | visible_presence
-    new_detected = jnp.where(
-        should_detect,
-        state.host_activity_detected.at[target_host].set(True),
-        state.host_activity_detected,
-    )
-
-    # Analyse detects malware via DensityScout - reveals Privileged compromise
-    # Only Analyse can detect malware; PrivEsc sets host_has_malware but Blue
-    # doesn't see Privileged until Analyse discovers it
     has_malware = state.host_has_malware[target_host]
     new_malware_detected = jnp.where(
         has_malware,
         state.host_malware_detected.at[target_host].set(True),
         state.host_malware_detected,
     )
+    new_unknown = jnp.where(
+        has_malware,
+        state.host_observation_unknown.at[target_host].set(False),
+        state.host_observation_unknown,
+    )
 
     return state.replace(
-        host_activity_detected=new_detected,
-        host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
+        host_observation_unknown=new_unknown,
         host_malware_detected=new_malware_detected,
     )
 
@@ -455,9 +427,15 @@ def _apply_remove(state: CageState, target_host: int) -> CageState:
         state.red_privilege[target_host],
     )
 
-    # Clear activity detected flag and set unknown flag after Remove
+    # Clear detected flags and set Unknown only if Blue believed the host was compromised
+    believed_compromised = state.host_activity_detected[target_host] | state.host_malware_detected[target_host]
     new_activity_detected = state.host_activity_detected.at[target_host].set(False)
-    new_observation_unknown = state.host_observation_unknown.at[target_host].set(True)
+    new_malware_detected = state.host_malware_detected.at[target_host].set(False)
+    new_observation_unknown = jnp.where(
+        believed_compromised,
+        state.host_observation_unknown.at[target_host].set(True),
+        state.host_observation_unknown,
+    )
 
     return state.replace(
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
@@ -465,6 +443,7 @@ def _apply_remove(state: CageState, target_host: int) -> CageState:
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_activity_detected=new_activity_detected,
         host_observation_unknown=new_observation_unknown,
+        host_malware_detected=new_malware_detected,
     )
 
 
@@ -667,13 +646,15 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
 
     # Can scan if Red has session in adjacent subnet (or same subnet)
     can_scan = jnp.any(red_subnets & const.subnet_adjacency[:, target_subnet])
+    has_service = jnp.any(state.host_services[target_host])
+    scan_visible = can_scan & has_service
 
     return state.replace(
         red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[target_host].set(
             state.red_scanned_hosts_jax[target_host] | can_scan
         ),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            jnp.where(can_scan, ACTIVITY_SCAN, state.red_activity_this_step[target_host])
+            jnp.where(scan_visible, ACTIVITY_SCAN, state.red_activity_this_step[target_host])
         ),
         last_red_action_success=can_scan,
     )
@@ -788,14 +769,23 @@ def _apply_exploit(
         state.red_privilege[target_host],
     )
 
+    # Valid privileged session for rewards: exploits that directly grant root/SYSTEM
+    # should count immediately (e.g., EternalBlue, Haraka, FTP, SQL, BlueKeep).
+    new_valid_privesc = jnp.where(
+        success & (target_privilege == COMPROMISE_PRIVILEGED),
+        True,
+        state.host_has_valid_privesc[target_host],
+    )
+
     # Detection: 95% of exploits are detectable (matching CybORG's detection_rate = 0.95)
     # 5% of exploits succeed silently and cannot be detected by Blue
     is_detected = jax.random.uniform(key) < EXPLOIT_DETECTION_RATE
 
     # Log activity when Red attempts exploit on a valid target (real service OR decoy)
     # This includes: successful exploit OR honeypot caught Red (decoy blocked)
-    attempted_on_target = has_route & has_target
+    attempted_on_target = has_route & has_target & host_known
     activity_visible = attempted_on_target & is_detected
+    activity_scan = attempted_on_target & ~is_detected
 
     # Set malware on successful exploit (CybORG creates cmd.exe/cmd.sh with density=0.9)
     new_malware = jnp.where(
@@ -808,12 +798,22 @@ def _apply_exploit(
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
         red_sessions=state.red_sessions.at[target_host].set(new_sessions),
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
+        host_has_valid_privesc=state.host_has_valid_privesc.at[target_host].set(new_valid_privesc),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            jnp.where(activity_visible, ACTIVITY_EXPLOIT, state.red_activity_this_step[target_host])
+            jnp.where(
+                activity_visible,
+                ACTIVITY_EXPLOIT,
+                jnp.where(activity_scan, ACTIVITY_SCAN, state.red_activity_this_step[target_host])
+            )
         ),
         host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
         last_red_action_success=success,
     )
+
+
+def apply_monitor_post_red(state: CageState, const: CageConst) -> CageState:
+    """Run Blue's end-of-step monitor pass after Red acts."""
+    return _apply_monitor(state, const)
 
 
 def _apply_privesc(state: CageState, target_host: int, const: CageConst, key: chex.PRNGKey) -> CageState:

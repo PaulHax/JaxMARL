@@ -242,6 +242,17 @@ def load_scenario_from_yaml(
             has_bruteforceable_users=has_bruteforceable_users,
         ))
 
+    # Build User -> Enterprise mapping from scenario connectivity info.
+    # CybORG's B_lineAgent chooses the first Enterprise host visible from the User host.
+    user_to_enterprise = {}
+    for host_name, host_info in hosts_data.items():
+        if not host_name.startswith('User') or host_name == 'User0':
+            continue
+        info = host_info.get('info', {}) or {}
+        enterprise_candidates = sorted([name for name in info.keys() if 'Enterprise' in name])
+        if enterprise_candidates:
+            user_to_enterprise[host_name] = enterprise_candidates[0]
+
     # Build subnet configs with connectivity
     # NACLs define bidirectional rules: source must allow 'out' AND target must allow 'in'
     all_subnet_names = list(subnets_data.keys())
@@ -333,6 +344,6 @@ def load_scenario_from_yaml(
         subnets=subnet_configs,
         agents=agent_configs,
         max_steps=100,
+        user_to_enterprise=user_to_enterprise,
     )
-
 
