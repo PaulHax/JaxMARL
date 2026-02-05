@@ -294,7 +294,7 @@ class TestJaxBLineAgent:
         action_mask = jnp.ones(NUM_RED_ACTIONS, dtype=jnp.bool_)
 
         action, new_state = bline_get_action(
-            bline_state, red_obs, action_mask, env.const, jax.random.PRNGKey(0)
+            bline_state, red_obs, action_mask, env.const, jax.random.PRNGKey(0), state.host_services
         )
 
         assert int(new_state.fsm_state) == 1, "Should advance to state 1 on success"
@@ -316,7 +316,7 @@ class TestJaxBLineAgent:
         action_mask = jnp.ones(NUM_RED_ACTIONS, dtype=jnp.bool_)
 
         action, new_state = bline_get_action(
-            bline_state, red_obs, action_mask, env.const, jax.random.PRNGKey(0)
+            bline_state, red_obs, action_mask, env.const, jax.random.PRNGKey(0), state.host_services
         )
 
         assert int(new_state.fsm_state) == 2, \

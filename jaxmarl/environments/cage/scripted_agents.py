@@ -65,7 +65,7 @@ TOP_CHOICE_PROBABILITY = 0.75
 
 
 def _get_host_exploit_probabilistic(
-    host_idx: chex.Array, const: CageConst, key: chex.PRNGKey
+    host_idx: chex.Array, host_services: chex.Array, const: CageConst, key: chex.PRNGKey
 ) -> chex.Array:
     """Get exploit for a host using CybORG's probabilistic selection.
 
@@ -75,7 +75,7 @@ def _get_host_exploit_probabilistic(
     - If one exploit available: use it
     - If no exploits available: return 0 (fallback)
     """
-    services = const.initial_services[host_idx]  # (num_services,)
+    services = host_services[host_idx]  # (num_services,)
 
     # Check which exploits are available based on host's services
     def check_exploit(exploit_idx):
@@ -154,6 +154,7 @@ def bline_get_action(
     action_mask: chex.Array,
     const: CageConst,
     key: chex.PRNGKey,
+    host_services: chex.Array,
 ) -> Tuple[chex.Array, BLineState]:
     """Get B_lineAgent action based on FSM state.
 
@@ -206,7 +207,9 @@ def bline_get_action(
     # CybORG's B_lineAgent doesn't check action masks - it just tries actions
     # and they succeed/fail based on game rules
     # Exploit selection is probabilistic matching CybORG's DefaultExploitActionSelector
-    action = _fsm_state_to_action(new_fsm_state, const, agent_state.target_user_idx, key)
+    action = _fsm_state_to_action(
+        new_fsm_state, const, agent_state.target_user_idx, key, host_services
+    )
 
     new_agent_state = BLineState(
         fsm_state=new_fsm_state,
@@ -218,7 +221,11 @@ def bline_get_action(
 
 
 def _fsm_state_to_action(
-    fsm_state: chex.Array, const: CageConst, target_user_idx: chex.Array, key: chex.PRNGKey
+    fsm_state: chex.Array,
+    const: CageConst,
+    target_user_idx: chex.Array,
+    key: chex.PRNGKey,
+    host_services: chex.Array,
 ) -> chex.Array:
     """Map FSM state to Red action index.
 
@@ -263,7 +270,7 @@ def _fsm_state_to_action(
         return scan_start + user_host
 
     def state_2(_):  # Exploit(User1)
-        exploit_type = _get_host_exploit_probabilistic(user_host, const, keys[0])
+        exploit_type = _get_host_exploit_probabilistic(user_host, host_services, const, keys[0])
         return exploit_start + user_host * const.num_exploits + exploit_type
 
     def state_3(_):  # PrivEsc(User1)
@@ -273,7 +280,7 @@ def _fsm_state_to_action(
         return scan_start + enterprise1
 
     def state_5(_):  # Exploit(Enterprise1)
-        exploit_type = _get_host_exploit_probabilistic(enterprise1, const, keys[1])
+        exploit_type = _get_host_exploit_probabilistic(enterprise1, host_services, const, keys[1])
         return exploit_start + enterprise1 * const.num_exploits + exploit_type
 
     def state_6(_):  # PrivEsc(Enterprise1)
@@ -286,7 +293,7 @@ def _fsm_state_to_action(
         return scan_start + enterprise2
 
     def state_9(_):  # Exploit(Enterprise2)
-        exploit_type = _get_host_exploit_probabilistic(enterprise2, const, keys[2])
+        exploit_type = _get_host_exploit_probabilistic(enterprise2, host_services, const, keys[2])
         return exploit_start + enterprise2 * const.num_exploits + exploit_type
 
     def state_10(_):  # PrivEsc(Enterprise2)
@@ -296,7 +303,7 @@ def _fsm_state_to_action(
         return scan_start + op_server0
 
     def state_12(_):  # Exploit(Op_Server0)
-        exploit_type = _get_host_exploit_probabilistic(op_server0, const, keys[3])
+        exploit_type = _get_host_exploit_probabilistic(op_server0, host_services, const, keys[3])
         return exploit_start + op_server0 * const.num_exploits + exploit_type
 
     def state_13(_):  # PrivEsc(Op_Server0)
@@ -322,6 +329,7 @@ def bline_get_action_batched(
     action_masks: chex.Array,
     const: CageConst,
     keys: chex.PRNGKey,
+    host_services: chex.Array,
 ) -> Tuple[chex.Array, BLineState]:
     """Batched version of bline_get_action.
 
@@ -335,8 +343,8 @@ def bline_get_action_batched(
     Returns:
         Tuple of (actions with shape (batch_size,), new_agent_states)
     """
-    return jax.vmap(bline_get_action, in_axes=(0, 0, 0, None, 0))(
-        agent_states, red_obs, action_masks, const, keys
+    return jax.vmap(bline_get_action, in_axes=(0, 0, 0, None, 0, 0))(
+        agent_states, red_obs, action_masks, const, keys, host_services
     )
 
 
@@ -410,6 +418,7 @@ def meander_get_action(
     action_mask: chex.Array,
     const: CageConst,
     key: chex.PRNGKey,
+    host_services: chex.Array,
 ) -> Tuple[chex.Array, MeanderState]:
     """Get RedMeanderAgent action based on opportunistic exploration.
 
@@ -428,6 +437,7 @@ def meander_get_action(
         action_mask: Valid action mask
         const: Environment constants
         key: Random key for shuffling targets
+        host_services: Host services matrix (num_hosts, num_services)
 
     Returns:
         Tuple of (action_index, new_agent_state)
@@ -554,7 +564,9 @@ def meander_get_action(
                         is_not_exploited = ~state.exploited_ips[host]
 
                         # Use probabilistic exploit selection matching CybORG
-                        exploit_type = _get_host_exploit_probabilistic(host, const, exploit_key)
+                        exploit_type = _get_host_exploit_probabilistic(
+                            host, host_services, const, exploit_key
+                        )
                         exploit_action_idx = exploit_start + host * const.num_exploits + exploit_type
                         is_valid = action_mask[exploit_action_idx]
 
@@ -709,6 +721,7 @@ def meander_get_action_batched(
     action_masks: chex.Array,
     const: CageConst,
     keys: chex.PRNGKey,
+    host_services: chex.Array,
 ) -> Tuple[chex.Array, MeanderState]:
     """Batched version of meander_get_action.
 
@@ -718,12 +731,13 @@ def meander_get_action_batched(
         action_masks: Action masks with shape (batch_size, num_actions)
         const: Environment constants (shared)
         keys: Random keys with shape (batch_size, 2)
+        host_services: Host services with shape (batch_size, num_hosts, num_services)
 
     Returns:
         Tuple of (actions with shape (batch_size,), new_agent_states)
     """
-    return jax.vmap(meander_get_action, in_axes=(0, 0, 0, None, 0))(
-        agent_states, red_obs, action_masks, const, keys
+    return jax.vmap(meander_get_action, in_axes=(0, 0, 0, None, 0, 0))(
+        agent_states, red_obs, action_masks, const, keys, host_services
     )
 
 

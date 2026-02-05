@@ -1,7 +1,8 @@
 """CAGE-JAX: JAX implementation of CAGE Challenge 2 environment."""
 
 from jaxmarl.environments.cage.cage_env import CageEnv, make_cage_env
-from jaxmarl.environments.cage.heuristic_red_cage_env import HeuristicRedCAGE, HeuristicMeanderCAGE
+from jaxmarl.environments.cage.heuristic_red_cage_env import HeuristicRedCAGE, HeuristicBLineCAGE
+from jaxmarl.environments.cage.heuristic_meander_cage_env import HeuristicMeanderCAGE
 from jaxmarl.environments.cage.scripted_agents import (
     BLineState,
     bline_reset,
@@ -61,6 +62,7 @@ __all__ = [
     'CageEnv',
     'make_cage_env',
     'HeuristicRedCAGE',
+    'HeuristicBLineCAGE',
     'HeuristicMeanderCAGE',
     # Scripted agents - B_lineAgent
     'BLineState',

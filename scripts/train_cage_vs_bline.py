@@ -155,7 +155,8 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
         # Red: fixed B_lineAgent
         red_keys = jax.random.split(key_red, env_states.time.shape[0])
         red_actions, new_bline_states = bline_get_action_batched(
-            bline_states, obs['red'], avail['red'], env.const, red_keys
+            bline_states, obs['red'], avail['red'], env.const, red_keys,
+            env_states.host_services
         )
 
         actions = {'blue': blue_actions, 'red': red_actions}

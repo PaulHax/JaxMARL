@@ -130,7 +130,7 @@ class TestBLineAgentFSM:
             # Get B_lineAgent action
             key, subkey = jax.random.split(key)
             action, new_agent_state = bline_get_action(
-                agent_state, obs['red'], avail['red'], env.const, subkey
+                agent_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
 
             # Action should be valid (within action space)
@@ -155,7 +155,7 @@ class TestBLineAgentFSM:
             avail = env.get_avail_actions(state)
             key, subkey = jax.random.split(key)
             action, agent_state = bline_get_action(
-                agent_state, obs['red'], avail['red'], env.const, subkey
+                agent_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
 
             # Step environment
@@ -241,7 +241,7 @@ class TestObservationPersistence:
 
             key, subkey = jax.random.split(key)
             red_action, bline_state = bline_get_action(
-                bline_state, obs['red'], avail['red'], env.const, subkey
+                bline_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
 
             blue_action = jnp.array(0)  # Sleep
@@ -282,7 +282,7 @@ class TestObservationPersistence:
 
             key, subkey = jax.random.split(key)
             red_action, bline_state = bline_get_action(
-                bline_state, obs['red'], avail['red'], env.const, subkey
+                bline_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
 
             blue_action = jnp.array(0)  # Sleep
@@ -298,7 +298,7 @@ class TestObservationPersistence:
         avail = env.get_avail_actions(state)
         key, subkey = jax.random.split(key)
         red_action, bline_state = bline_get_action(
-            bline_state, obs['red'], avail['red'], env.const, subkey
+            bline_state, obs['red'], avail['red'], env.const, subkey, state.host_services
         )
 
         blue_action = jnp.array(1)  # Monitor
@@ -379,7 +379,7 @@ class TestRedMeanderAgent:
 
         key, subkey = jax.random.split(key)
         action, new_agent_state = meander_get_action(
-            agent_state, obs['red'], avail['red'], env.const, subkey
+            agent_state, obs['red'], avail['red'], env.const, subkey, state.host_services
         )
 
         assert 0 <= int(action) < env.red_action_size
@@ -400,7 +400,7 @@ class TestRedMeanderAgent:
             avail = env.get_avail_actions(state)
             key, subkey = jax.random.split(key)
             action, agent_state = meander_get_action(
-                agent_state, obs['red'], avail['red'], env.const, subkey
+                agent_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
             actions_taken.append(int(action))
 
@@ -426,7 +426,7 @@ class TestRedMeanderAgent:
             avail = env.get_avail_actions(state)
             key, subkey = jax.random.split(key)
             action, agent_state = meander_get_action(
-                agent_state, obs['red'], avail['red'], env.const, subkey
+                agent_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
 
             key, subkey = jax.random.split(key)
@@ -460,7 +460,7 @@ class TestRedMeanderAgent:
 
         keys = jax.random.split(key, batch_size)
         actions, new_states = meander_get_action_batched(
-            agent_states, obs['red'], avail['red'], env.const, keys
+            agent_states, obs['red'], avail['red'], env.const, keys, states.host_services
         )
 
         assert actions.shape == (batch_size,)
@@ -482,7 +482,7 @@ class TestRedMeanderAgent:
             avail = env.get_avail_actions(state)
             key, subkey = jax.random.split(key)
             action, agent_state = meander_get_action(
-                agent_state, obs['red'], avail['red'], env.const, subkey
+                agent_state, obs['red'], avail['red'], env.const, subkey, state.host_services
             )
 
             assert 0 <= int(action) < env.red_action_size

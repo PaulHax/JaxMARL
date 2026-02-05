@@ -11,7 +11,7 @@ from jaxmarl.environments.cage.state import (
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
     ACTIVITY_NONE, ACTIVITY_SCAN, ACTIVITY_EXPLOIT,
     EXPLOIT_IDS, NUM_DECOY_TYPES, OS_LINUX, OS_WINDOWS, DECOY_IDS,
-    HOST_NAMES, SUBNET_IDS,
+    HOST_NAMES, SUBNET_IDS, SERVICE_IDS,
 )
 from jaxmarl.environments.cage.config import DECOY_OS_RESTRICTIONS, OS_ANY
 
@@ -52,6 +52,21 @@ DECOY_SERVICE_CONFLICTS = jnp.array([
     [7, -1],  # DecoySvchost (port 3389) conflicts with rdp(7)
     [2, 8],   # DecoyTomcat (port 80) conflicts with http(2) or tomcat(8)
     [1, -1],  # DecoyVsftpd (port 21) conflicts with ftp(1)
+], dtype=jnp.int32)
+
+# Mapping from decoy type -> service index to add when decoy is deployed.
+# This is used to make decoys visible to Red's service discovery/exploit selection,
+# matching CybORG's behavior where decoys add services with open ports.
+# Note: DecoyTomcat is mapped to HTTP to match existing parity expectations/tests.
+DECOY_SERVICE_IDS = jnp.array([
+    SERVICE_IDS['http'],    # DecoyApache (port 80)
+    SERVICE_IDS['ftp'],     # DecoyFemitter (port 21)
+    SERVICE_IDS['haraka'],  # DecoyHarakaSMPT (port 25)
+    SERVICE_IDS['smb'],     # DecoySmss (port 139)
+    SERVICE_IDS['ssh'],     # DecoySSHD (port 22)
+    SERVICE_IDS['rdp'],     # DecoySvchost (port 3389)
+    SERVICE_IDS['http'],    # DecoyTomcat (treated as HTTP for parity)
+    SERVICE_IDS['ftp'],     # DecoyVsftpd (port 21)
 ], dtype=jnp.int32)
 
 # Default action space sizes for backward compatibility (Scenario 2 with 13 hosts)
@@ -520,8 +535,18 @@ def _apply_decoy(state: CageState, target_host: int, decoy_type: int, const: Cag
     can_deploy = port_available & os_compatible
     new_decoy_value = jnp.where(can_deploy, True, state.host_decoys[target_host, decoy_type])
 
+    # Add the decoy's service to host_services so Red can discover it via scan.
+    # This mirrors CybORG's behavior where decoys create services with open ports.
+    service_idx = DECOY_SERVICE_IDS[decoy_type]
+    new_service_value = jnp.where(
+        can_deploy,
+        True,
+        state.host_services[target_host, service_idx]
+    )
+
     return state.replace(
         host_decoys=state.host_decoys.at[target_host, decoy_type].set(new_decoy_value),
+        host_services=state.host_services.at[target_host, service_idx].set(new_service_value),
     )
 
 

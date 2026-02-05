@@ -38,6 +38,7 @@ _IMPORT_MAP = {
     'JaxNav': ('.jaxnav', 'JaxNav'),
     'CageEnv': ('.cage', 'CageEnv'),
     'HeuristicRedCAGE': ('.cage', 'HeuristicRedCAGE'),
+    'HeuristicBLineCAGE': ('.cage', 'HeuristicBLineCAGE'),
     'HeuristicMeanderCAGE': ('.cage', 'HeuristicMeanderCAGE'),
 }
 

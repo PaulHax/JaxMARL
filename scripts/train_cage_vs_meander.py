@@ -148,7 +148,12 @@ def collect_rollout(key, env, states, train_state_blue, meander_states, num_step
         # Red: fixed RedMeanderAgent
         red_keys = jax.random.split(key_red, env_states.time.shape[0])
         red_actions, new_meander_states = meander_get_action_batched(
-            meander_states, obs['red'], avail['red'], env.const, red_keys
+            meander_states,
+            obs['red'],
+            avail['red'],
+            env.const,
+            red_keys,
+            env_states.host_services,
         )
 
         actions = {'blue': blue_actions, 'red': red_actions}

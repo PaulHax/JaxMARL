@@ -413,7 +413,8 @@ class DifferentialHarness:
                 key = jax.random.PRNGKey(self.seed + step)
                 action, bline_state = bline_get_action(
                     bline_state, red_obs, action_mask,
-                    self.jax_env.const, key
+                    self.jax_env.const, key,
+                    self.jax_state.host_services
                 )
                 return int(action)
 
@@ -937,7 +938,8 @@ class JaxOnlyHarness:
             key = jax.random.PRNGKey(self.seed + step)
             action, bline_state = bline_get_action(
                 bline_state, red_obs, action_mask,
-                self.jax_env.const, key
+                self.jax_env.const, key,
+                self.jax_state.host_services
             )
             return int(action)
 
