@@ -35,15 +35,27 @@ def load_jax_policy(checkpoint_path: str):
     # Handle different checkpoint formats
     # ippo_ff_cage saves as {'params': {'params': actual_params}}
     if 'params' in data:
-        params = data['params']
-        # Check for nested params
-        if isinstance(params, dict) and 'params' in params:
-            params = params
-        return params
+        return data['params']
     elif 'actor_params' in data:
-        return data['actor_params']
+        params = data['actor_params']
+        if isinstance(params, dict) and 'params' not in params:
+            params = {'params': params}
+        return params
     else:
-        return data
+        params = data
+        if isinstance(params, dict) and 'params' not in params:
+            params = {'params': params}
+        return params
+
+
+def infer_hidden_dim(params):
+    """Infer hidden dim from checkpoint params."""
+    if isinstance(params, dict) and 'params' in params:
+        params = params['params']
+    dense0 = params.get('Dense_0')
+    if dense0 is None:
+        raise KeyError("Could not infer hidden_dim (Dense_0 not found in params)")
+    return int(dense0['bias'].shape[0])
 
 
 def create_jax_env(seed: int = 42):
@@ -148,13 +160,14 @@ def run_comparison(checkpoint_path: str, num_steps: int = 100, seed: int = 42,
 
     print(f"Loading checkpoint: {checkpoint_path}")
     params = load_jax_policy(checkpoint_path)
+    hidden_dim = infer_hidden_dim(params)
 
     # Create network
     jax_env = create_jax_env(seed)
     obs_shape = jax_env.observation_space('blue').shape[0]
     action_dim = jax_env.action_space('blue').n
 
-    network = ActorCritic(action_dim=action_dim, activation="tanh")
+    network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation="tanh")
 
     # Initialize environments
     key = jax.random.PRNGKey(seed)

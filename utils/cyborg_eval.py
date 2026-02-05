@@ -62,16 +62,23 @@ def setup_cyborg_eval(cyborg_path: str):
 def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
                        steps: int = 100, seed: int = 42, track_actions: bool = True,
                        export_dir: str = None, red_agent_name: str = "bline",
-                       scenario: str = "Scenario2"):
+                       scenario: str = "Scenario2", use_action_mask: bool = True,
+                       deterministic: bool = True):
     """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
 
     Args:
         red_agent_name: "bline" or "meander"
         scenario: JAX scenario name (e.g., "Scenario2", "hosts_2")
+        use_action_mask: whether to mask already-deployed decoy actions
+        deterministic: if True, use argmax; if False, sample from logits
 
     Returns dict with: confidentiality, integrity, availability, resilience, reward,
     optionally action distribution percentages, and trajectory_dir path.
     """
+    if episodes <= 0 or steps <= 0:
+        print("Skipping CybORG eval: episodes/steps must be > 0")
+        return None
+
     if not CYBORG_AVAILABLE:
         return None
 
@@ -98,7 +105,12 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
     else:
         red_agent_class = B_lineAgent
 
-    agent = JaxPolicyAgent(checkpoint_path)
+    agent = JaxPolicyAgent(
+        checkpoint_path,
+        use_action_mask=use_action_mask,
+        deterministic=deterministic,
+        seed=seed,
+    )
     metric = ResilienceMetric()
 
     if export_dir is None:
@@ -173,6 +185,10 @@ def run_final_cyborg_eval(checkpoint_path: str, cyborg_path: str, mlflow_module,
 
     This is the default post-training evaluation that logs trajectory JSONs as artifacts.
     """
+    if episodes <= 0 or steps <= 0:
+        print("Skipping CybORG eval: episodes/steps must be > 0")
+        return
+
     if not setup_cyborg_eval(cyborg_path):
         print("Warning: CybORG not available, skipping final evaluation")
         return

@@ -501,12 +501,6 @@ def main(config):
 
     metrics_logger.close()
 
-    if best_update < num_updates - 5:
-        print(f"\n⚠️  Policy collapse detected!")
-        print(f"   Best reward: {best_reward:.1f} at update {best_update}")
-        print(f"   Final reward: {float(metrics['returned_episode_returns'][-1].mean()):.1f}")
-        print(f"   Consider: lower LR, higher ENT_COEF, fewer UPDATE_EPOCHS")
-
     if num_seeds > 1:
         params = jax.tree.map(lambda x: x[0], out["runner_state"][0][0].params)
     else:

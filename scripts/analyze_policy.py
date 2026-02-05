@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 """Analyze action distribution of trained CAGE policy."""
+import argparse
 import pickle
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from flax.linen.initializers import constant, orthogonal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from jaxmarl.environments.cage import HeuristicRedCAGE
+from jaxmarl.environments.cage.actions import get_blue_action_offsets
 
 class ActorCritic(nn.Module):
     action_dim: int
@@ -57,7 +59,29 @@ def get_action_name(action_idx, num_hosts=13):
         return f"Restore({action_idx - base})"
     return f"Unknown({action_idx})"
 
-def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
+def _action_type(action_idx, num_hosts=13):
+    if action_idx == 0:
+        return "Sleep"
+    elif action_idx == 1:
+        return "Monitor"
+    base = 2
+    if action_idx < base + num_hosts:
+        return "Analyse"
+    base += num_hosts
+    if action_idx < base + num_hosts:
+        return "Remove"
+    base += num_hosts
+    num_decoys = 8
+    total_decoy = num_hosts * num_decoys
+    if action_idx < base + total_decoy:
+        return "Decoy"
+    base += total_decoy
+    if action_idx < base + num_hosts:
+        return "Restore"
+    return "Unknown"
+
+
+def analyze_policy(checkpoint_path: str, num_episodes: int = 10, top_k: int = 5):
     with open(checkpoint_path, 'rb') as f:
         ckpt = pickle.load(f)
 
@@ -73,6 +97,10 @@ def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
     network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim)
 
     action_counts = np.zeros(action_dim)
+    topk_counts = np.zeros(action_dim)
+    argmax_type_counts = {k: 0 for k in ["Sleep", "Monitor", "Analyse", "Remove", "Decoy", "Restore", "Unknown"]}
+    restore_decoy_gaps = []
+    decoy_wins = 0
     total_actions = 0
     episode_rewards = []
 
@@ -88,11 +116,34 @@ def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
         while not done and step < 100:
             obs_blue = obs["blue"]
             pi, _ = network.apply(params, obs_blue)
+            logits = np.array(pi.logits)
             key, action_key = jax.random.split(key)
             action = pi.sample(seed=action_key)
             action_int = int(action)
             action_counts[action_int] += 1
             total_actions += 1
+
+            # Argmax diagnostics
+            argmax_action = int(np.argmax(logits))
+            argmax_type_counts[_action_type(argmax_action, num_hosts=env.const.num_hosts)] += 1
+
+            # Top-K logits frequency
+            if top_k > 0:
+                k = min(top_k, logits.shape[0])
+                topk_idx = np.argpartition(-logits, k - 1)[:k]
+                for idx in topk_idx:
+                    topk_counts[idx] += 1
+
+            # Restore vs Decoy logit gap
+            analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(env.const)
+            restore_end = restore_start + env.const.num_hosts
+            decoy_end = restore_start
+            max_restore = float(np.max(logits[restore_start:restore_end]))
+            max_decoy = float(np.max(logits[decoy_start:decoy_end]))
+            restore_decoy_gaps.append(max_restore - max_decoy)
+            if max_decoy > max_restore:
+                decoy_wins += 1
+
             key, step_key = jax.random.split(key)
             actions = {"blue": action, "red": jnp.array(0)}
             obs, state, reward, done_dict, info = env.step(step_key, state, actions)
@@ -112,7 +163,7 @@ def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
     action_probs = action_counts / total_actions
     sorted_indices = np.argsort(-action_counts)
 
-    print("Top 20 actions by frequency:")
+    print("Top 20 actions by frequency (sampled actions):")
     print("-" * 50)
     for i, idx in enumerate(sorted_indices[:20]):
         if action_counts[idx] > 0:
@@ -137,6 +188,33 @@ def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
     print(f"  Restore:  {restore_count/total_actions*100:6.2f}% ({int(restore_count)} actions)")
     print()
 
+    print("Argmax action type breakdown (logits):")
+    print("-" * 50)
+    for k, v in argmax_type_counts.items():
+        print(f"  {k:8s}: {v/total_actions*100:6.2f}% ({int(v)} steps)")
+    print()
+
+    if top_k > 0:
+        print(f"Top {top_k} logits frequency (by action):")
+        print("-" * 50)
+        topk_probs = topk_counts / total_actions
+        topk_sorted = np.argsort(-topk_counts)
+        for i, idx in enumerate(topk_sorted[:20]):
+            if topk_counts[idx] > 0:
+                name = get_action_name(idx)
+                print(f"  {i+1:2d}. {name:25s} {topk_probs[idx]*100:6.2f}% ({int(topk_counts[idx])} steps)")
+        print()
+
+    if restore_decoy_gaps:
+        gaps = np.array(restore_decoy_gaps)
+        print("Restore vs Decoy logit gap (max Restore - max Decoy):")
+        print("-" * 50)
+        print(f"  Mean gap:   {gaps.mean():8.4f}")
+        print(f"  Median gap: {np.median(gaps):8.4f}")
+        print(f"  P95 gap:    {np.percentile(gaps, 95):8.4f}")
+        print(f"  Decoy wins: {decoy_wins/total_actions*100:6.2f}% ({decoy_wins} steps)")
+        print()
+
     print("Entropy analysis:")
     print("-" * 50)
     nonzero_probs = action_probs[action_probs > 0]
@@ -148,5 +226,9 @@ def analyze_policy(checkpoint_path: str, num_episodes: int = 10):
     print(f"  Unique actions:    {np.sum(action_counts > 0)} / {action_dim}")
 
 if __name__ == "__main__":
-    ckpt_path = sys.argv[1] if len(sys.argv) > 1 else "experiments/2026-01-27_210130_blue-vs-bline_seed0/checkpoint_final.pkl"
-    analyze_policy(ckpt_path)
+    parser = argparse.ArgumentParser(description="Analyze action distribution and logits of CAGE policy")
+    parser.add_argument("checkpoint", nargs="?", default="experiments/2026-01-27_210130_blue-vs-bline_seed0/checkpoint_final.pkl")
+    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument("--top_k", type=int, default=5)
+    args = parser.parse_args()
+    analyze_policy(args.checkpoint, num_episodes=args.episodes, top_k=args.top_k)
