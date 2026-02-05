@@ -105,15 +105,29 @@ class TestResult:
 
 
 def _get_cyborg_scenario_path(scenario_name: str = "Scenario2.yaml") -> Path:
-    """Get path to CybORG scenario file."""
+    """Get path to CybORG scenario file.
+
+    Searches for the scenario in standard CybORG paths:
+    - CybORG/Shared/Scenarios/
+    - CybORG/Shared/Scenarios/scalability_experiments/
+    """
     spec = importlib.util.find_spec("CybORG")
     if spec is None or spec.origin is None:
         raise ImportError("CybORG package not found")
     cyborg_path = Path(spec.origin).parent
-    scenario_path = cyborg_path / "Shared" / "Scenarios" / scenario_name
-    if not scenario_path.exists():
-        raise FileNotFoundError(f"Scenario file not found: {scenario_path}")
-    return scenario_path
+    scenarios_dir = cyborg_path / "Shared" / "Scenarios"
+
+    scenario_path = scenarios_dir / scenario_name
+    if scenario_path.exists():
+        return scenario_path
+
+    scalability_path = scenarios_dir / "scalability_experiments" / scenario_name
+    if scalability_path.exists():
+        return scalability_path
+
+    raise FileNotFoundError(
+        f"Scenario file not found in {scenarios_dir} or {scenarios_dir / 'scalability_experiments'}: {scenario_name}"
+    )
 
 
 class DifferentialHarness:
@@ -165,19 +179,46 @@ class DifferentialHarness:
         return get_scenario(scenario_name)
 
     def _create_cyborg_env(self):
-        """Create CybORG environment."""
+        """Create CybORG environment.
+
+        For scenarios using AlignedReward calculator (e.g., hosts_2), passes
+        the required agent_reward_params for the ResilienceMetric.
+        """
         from CybORG import CybORG
         scenario_name = self.scenario
         if not scenario_name.endswith('.yaml'):
             scenario_name = scenario_name + '.yaml'
         scenario_path = _get_cyborg_scenario_path(scenario_name)
-        env = CybORG(scenario_file=str(scenario_path), environment='sim')
+
+        agent_rewards = None
+        if 'hosts_' in scenario_name:
+            agent_rewards = {
+                'Blue': {
+                    'align_attribute': 'C',
+                    'alignment_metric': 'ResilienceMetric',
+                    'alpha': 1.0,
+                }
+            }
+
+        env = CybORG(scenario_file=str(scenario_path), environment='sim', agent_rewards=agent_rewards)
         env.set_seed(self.seed)
         return env
 
     def _create_jax_env(self) -> CageEnv:
-        """Create CAGE-JAX environment."""
-        return CageEnv(config=self.config, max_steps=self.max_steps)
+        """Create CAGE-JAX environment.
+
+        For hosts_* scenarios, enables resilience_gamma to match CybORG's
+        AlignedRewardCalculator with ResilienceMetric.
+        """
+        resilience_gamma = 0.0
+        if 'hosts_' in self.scenario:
+            resilience_gamma = 1.0
+
+        return CageEnv(
+            config=self.config,
+            max_steps=self.max_steps,
+            resilience_gamma=resilience_gamma,
+        )
 
     def reset(self) -> Tuple[StateSnapshot, StateSnapshot]:
         """Reset both environments.

@@ -52,6 +52,7 @@ class CageEnv(MultiAgentEnv):
         config: Optional[ScenarioConfig] = None,
         num_red_agents: int = 1,
         num_blue_agents: int = 1,
+        resilience_gamma: float = 0.0,
     ):
         """Initialize CAGE environment.
 
@@ -61,6 +62,8 @@ class CageEnv(MultiAgentEnv):
             config: Optional ScenarioConfig to use instead of named scenario
             num_red_agents: Number of red team agents (default 1)
             num_blue_agents: Number of blue team agents (default 1)
+            resilience_gamma: Weight for ResilienceMetric bonus (0.0 = disabled).
+                Auto-enabled for hosts_* scenarios that have Auth/Database/Front hosts.
         """
         # Build configuration
         if config is not None:
@@ -78,6 +81,7 @@ class CageEnv(MultiAgentEnv):
 
         self.const = build_const_from_config(self.config)
         self.max_steps = max_steps
+        self.resilience_gamma = resilience_gamma
 
         # Build agent lists
         self.num_red_agents = self.config.num_red_agents
@@ -162,7 +166,7 @@ class CageEnv(MultiAgentEnv):
         state = apply_red_action(state, red_action, self.const, key_red)
 
         # Compute rewards
-        rewards = compute_rewards(state, self.const, blue_action, red_action)
+        rewards = compute_rewards(state, self.const, blue_action, red_action, self.resilience_gamma)
 
         # Distribute rewards to all agents on each team
         all_rewards = {}

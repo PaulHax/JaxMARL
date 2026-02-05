@@ -140,6 +140,25 @@ class CageState:
     # Malware presence - set when exploit succeeds (CybORG creates cmd.exe/cmd.sh with density=0.9)
     host_has_malware: chex.Array  # (max_hosts,) bool: malware installed by exploit
 
+    # Resilience tracking - tracks Red's last action for Blue's defensive response
+    # Used by ResilienceMetric to award bonuses for correct Blue actions
+    last_red_action_type: chex.Array     # scalar int: 0=Sleep, 1=Discover, 2=Scan, 3=Exploit, 4=PrivEsc, 5=Impact
+    last_red_action_target: chex.Array   # scalar int: target host index (-1 if no target)
+    last_red_action_success: chex.Array  # scalar bool: whether Red's action succeeded
+
+    # Valid privileged session tracking - matches CybORG's reward logic
+    # CybORG only counts root on Linux, SYSTEM on Windows. Initial abstract sessions
+    # (SYSTEM on Linux) don't count for rewards. Set by PrivEsc action on Linux,
+    # or by initial foothold on Windows.
+    host_has_valid_privesc: chex.Array   # (max_hosts,) bool: has a "counting" privileged session
+
+
+# Host type constants for ResilienceMetric
+HOST_TYPE_NORMAL = 0
+HOST_TYPE_AUTH = 1
+HOST_TYPE_DATABASE = 2
+HOST_TYPE_FRONT = 3
+
 
 @struct.dataclass
 class CageConst:
@@ -155,6 +174,10 @@ class CageConst:
     host_availability: chex.Array      # (num_hosts,) float: availability weight
     initial_services: chex.Array       # (num_hosts, num_services) bool: initial service config
     operational_targets: chex.Array    # (num_hosts,) bool: hosts that provide availability reward
+
+    # Host type for ResilienceMetric (determined by hostname pattern)
+    # 0=Normal, 1=Auth, 2=Database, 3=Front
+    host_type: chex.Array              # (num_hosts,) int: host type classification
 
     # Service vulnerability mapping: which exploits work on which services
     service_exploits: chex.Array       # (num_services, num_exploits) bool: service i vulnerable to exploit j
@@ -331,6 +354,19 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
             if has_rfi:
                 rfi_vulnerable_hosts = rfi_vulnerable_hosts.at[host_ids[host.name]].set(True)
 
+    # Build host_type array for ResilienceMetric
+    # Classify hosts based on hostname pattern
+    host_type = jnp.zeros(num_hosts, dtype=jnp.int32)
+    for host in config.hosts:
+        if host.name in host_ids:
+            idx = host_ids[host.name]
+            if 'Auth' in host.name:
+                host_type = host_type.at[idx].set(HOST_TYPE_AUTH)
+            elif 'Database' in host.name:
+                host_type = host_type.at[idx].set(HOST_TYPE_DATABASE)
+            elif 'Front' in host.name:
+                host_type = host_type.at[idx].set(HOST_TYPE_FRONT)
+
     return CageConst(
         adjacency=adjacency,
         subnet_adjacency=subnet_adjacency,
@@ -340,6 +376,7 @@ def build_const_from_config(config: ScenarioConfig) -> CageConst:
         host_availability=host_availability,
         initial_services=initial_services,
         operational_targets=operational_targets,
+        host_type=host_type,
         service_exploits=service_exploits,
         bruteforceable_hosts=bruteforceable_hosts,
         rfi_vulnerable_hosts=rfi_vulnerable_hosts,
@@ -400,7 +437,6 @@ def create_initial_state(const: CageConst) -> CageState:
         red_scanned_hosts_jax=jnp.zeros(num_hosts, dtype=jnp.bool_),
         cumulative_red_reward=jnp.array(0.0),
         cumulative_blue_reward=jnp.array(0.0),
-        last_red_action_success=jnp.array(False),
         last_blue_action_success=jnp.array(True),  # True by default, set False on failed actions
         ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
         red_knows_ot_service=jnp.zeros(num_hosts, dtype=jnp.bool_),
@@ -409,6 +445,10 @@ def create_initial_state(const: CageConst) -> CageState:
         red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.int32),
         host_has_malware=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_malware_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        last_red_action_type=jnp.array(0, dtype=jnp.int32),
+        last_red_action_target=jnp.array(-1, dtype=jnp.int32),
+        last_red_action_success=jnp.array(False),
+        host_has_valid_privesc=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 
 
@@ -416,6 +456,9 @@ def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
     """Create initial state where Red has a foothold on configured start hosts.
 
     CybORG starts Red with SYSTEM/root (PRIVILEGED) access on the foothold host.
+    The initial session type determines whether it counts for rewards:
+    - SYSTEM on Windows: counts (valid privileged session)
+    - SYSTEM on Linux: doesn't count (abstract session, need PrivEsc to get root)
     """
     state = create_initial_state(const)
 
@@ -423,12 +466,18 @@ def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
     red_start_mask = jnp.zeros(const.num_hosts, dtype=jnp.bool_)
     red_start_mask = red_start_mask.at[const.red_start_hosts].set(True)
 
+    # Valid privesc: Windows foothold hosts count (SYSTEM on Windows),
+    # Linux foothold hosts don't count (SYSTEM on Linux = abstract session)
+    is_windows = const.host_os == OS_WINDOWS
+    valid_privesc_mask = red_start_mask & is_windows
+
     state = state.replace(
         host_compromised=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.host_compromised),
         red_sessions=jnp.where(red_start_mask, 1, state.red_sessions),
         red_privilege=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.red_privilege),
         red_discovered_hosts_jax=red_start_mask | state.red_discovered_hosts_jax,
         red_scanned_hosts_jax=red_start_mask | state.red_scanned_hosts_jax,
+        host_has_valid_privesc=valid_privesc_mask | state.host_has_valid_privesc,
     )
 
     return state

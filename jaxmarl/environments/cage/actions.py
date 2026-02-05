@@ -474,6 +474,11 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
         lambda: state.red_privilege[target_host],
         lambda: jnp.array(COMPROMISE_NONE, dtype=state.red_privilege.dtype),
     )
+    new_valid_privesc = jax.lax.cond(
+        is_initial_foothold,
+        lambda: state.host_has_valid_privesc[target_host],
+        lambda: jnp.array(False, dtype=jnp.bool_),
+    )
 
     return state.replace(
         host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_NONE),
@@ -486,6 +491,7 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
         host_observation_unknown=state.host_observation_unknown.at[target_host].set(False),
         host_has_malware=state.host_has_malware.at[target_host].set(False),
         host_malware_detected=state.host_malware_detected.at[target_host].set(False),
+        host_has_valid_privesc=state.host_has_valid_privesc.at[target_host].set(new_valid_privesc),
     )
 
 
@@ -525,7 +531,13 @@ def apply_red_action(
     const: CageConst,
     key: chex.PRNGKey
 ) -> CageState:
-    """Apply red agent action to state."""
+    """Apply red agent action to state.
+
+    Also stores action info for ResilienceMetric:
+    - last_red_action_type: 0=Sleep, 1=Discover, 2=Scan, 3=Exploit, 4=PrivEsc, 5=Impact
+    - last_red_action_target: target host index (-1 for no target)
+    - last_red_action_success: whether the action succeeded
+    """
     action_type, target_subnet, target_host, exploit_type = decode_red_action(action, const)
 
     state = jax.lax.cond(
@@ -563,6 +575,14 @@ def apply_red_action(
         lambda s: _apply_impact(s, target_host, const),
         lambda s: s,
         state,
+    )
+
+    # Store action info for ResilienceMetric calculation
+    # target_host is valid for Scan(2), Exploit(3), PrivEsc(4), Impact(5)
+    effective_target = jnp.where(action_type >= 2, target_host, -1)
+    state = state.replace(
+        last_red_action_type=action_type,
+        last_red_action_target=effective_target,
     )
 
     return state
@@ -774,31 +794,37 @@ def _apply_exploit(
 def _apply_privesc(state: CageState, target_host: int, const: CageConst, key: chex.PRNGKey) -> CageState:
     """Escalate privileges on target host.
 
-    CybORG behavior: PrivilegeEscalate is deterministic - if Red has a user session
-    and the OS is compatible with the escalation method (JuicyPotato for Windows,
-    V4L2KernelExploit for Linux), escalation always succeeds.
+    CybORG behavior:
+    - If Red already has PRIVILEGED access, PrivEsc is a no-op (returns success but no change)
+    - If Red has USER access, escalation succeeds and creates a valid privileged session
+    - Valid privileged sessions count for confidentiality rewards
+    - On Linux, the initial SYSTEM foothold doesn't count (it's an abstract session)
+      but a PrivEsc from USER to root DOES count
 
     Also runs ExploreHost which discovers OTService on operational hosts, enabling Impact.
     """
     has_user_session = state.red_privilege[target_host] >= COMPROMISE_USER
+    already_privileged = state.red_privilege[target_host] >= COMPROMISE_PRIVILEGED
 
-    # Deterministic success matching CybORG (no random failure)
+    # PrivEsc succeeds if there's any user-level or higher session
     success = has_user_session
 
+    # Only actually escalate if not already privileged
     new_privilege = jnp.where(
-        success,
+        success & ~already_privileged,
         COMPROMISE_PRIVILEGED,
         state.red_privilege[target_host],
     )
 
     new_compromised = jnp.where(
-        success,
+        success & ~already_privileged,
         COMPROMISE_PRIVILEGED,
         state.host_compromised[target_host],
     )
 
+    # Malware is only created on actual escalation (not if already privileged)
     new_malware = jnp.where(
-        success,
+        success & ~already_privileged,
         True,
         state.host_has_malware[target_host],
     )
@@ -808,11 +834,19 @@ def _apply_privesc(state: CageState, target_host: int, const: CageConst, key: ch
     discovers_ot = success & is_operational
     new_knows_ot = jnp.where(discovers_ot, True, state.red_knows_ot_service[target_host])
 
+    # Valid privesc for rewards: only set when actual escalation happens (from USER)
+    # This excludes cases where:
+    # - The host was already privileged (initial foothold on Linux with SYSTEM = no escalation)
+    # - The action failed
+    actual_escalation = success & ~already_privileged
+    new_valid_privesc = jnp.where(actual_escalation, True, state.host_has_valid_privesc[target_host])
+
     return state.replace(
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_compromised=state.host_compromised.at[target_host].set(new_compromised),
         host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
         red_knows_ot_service=state.red_knows_ot_service.at[target_host].set(new_knows_ot),
+        host_has_valid_privesc=state.host_has_valid_privesc.at[target_host].set(new_valid_privesc),
         last_red_action_success=success,
     )
 
