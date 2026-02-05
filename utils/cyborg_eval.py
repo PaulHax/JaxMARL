@@ -62,7 +62,7 @@ def setup_cyborg_eval(cyborg_path: str):
 def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 10,
                        steps: int = 100, seed: int = 42, track_actions: bool = True,
                        export_dir: str = None, red_agent_name: str = "bline",
-                       scenario: str = "Scenario2", use_action_mask: bool = True,
+                       scenario: str = "Scenario2", use_action_mask: bool = False,
                        deterministic: bool = True):
     """Evaluate a JaxMARL checkpoint in CybORG and return CIA metrics.
 
