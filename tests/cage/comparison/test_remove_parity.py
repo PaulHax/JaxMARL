@@ -46,8 +46,9 @@ class TestRemovePenaltyCybORGParity:
     def test_remove_on_user_compromise_no_penalty(self):
         """CybORG vs JAX: Remove on USER-level compromised host should match rewards.
 
-        IMPORTANT: Monitor at step 3 runs AFTER Exploit at step 2 has completed,
-        so it detects the malicious processes. Remove at step 4 then succeeds.
+        IMPORTANT: Monitor after SSH exploit sees connection anomalies, but
+        SSHBruteForce does NOT create actionable PIDs in CybORG. Remove fails
+        and user access persists.
         """
         harness = DifferentialHarness(seed=42, max_steps=10, verbose=False)
 
@@ -77,8 +78,8 @@ class TestRemovePenaltyCybORGParity:
         assert abs(remove_step.cyborg_state.reward_blue - remove_step.jax_state.reward_blue) < 0.02, \
             f"Blue reward mismatch at Remove step: CybORG={remove_step.cyborg_state.reward_blue}, JAX={remove_step.jax_state.reward_blue}"
 
-        assert remove_step.jax_state.red_privilege.get('User1', 0) == 0, \
-            f"Red should have no privilege on User1 after Remove"
+        assert remove_step.jax_state.red_privilege.get('User1', 0) == 1, \
+            "SSH exploit does not create actionable PIDs in CybORG; Remove should fail and leave user access"
 
     def test_remove_on_privileged_compromise_no_extra_penalty(self):
         """CybORG vs JAX: Remove on PRIVILEGED host - verify no extra penalty.

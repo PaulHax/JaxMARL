@@ -7,6 +7,7 @@ environments in lockstep with identical actions and compares results.
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple, Any
 from pathlib import Path
+import random
 import importlib.util
 import numpy as np
 
@@ -145,6 +146,7 @@ class DifferentialHarness:
         check_rewards: bool = True,
         check_obs: bool = False,
         verbose: bool = False,
+        sync_detection_rng: bool = False,
     ):
         """Initialize the differential harness.
 
@@ -162,6 +164,7 @@ class DifferentialHarness:
         self.check_rewards = check_rewards
         self.check_obs = check_obs
         self.verbose = verbose
+        self.sync_detection_rng = sync_detection_rng
 
         self.cyborg_env = None
         self.jax_env = None
@@ -233,6 +236,17 @@ class DifferentialHarness:
 
         self.jax_key = jax.random.PRNGKey(self.seed)
         obs, self.jax_state = self.jax_env.reset(self.jax_key)
+
+        if self.sync_detection_rng:
+            # Use Python RNG sequence for exploit detection to align with CybORG
+            rng = random.Random(self.seed)
+            seq_len = int(self.jax_env.const.max_steps)
+            detection_seq = jnp.array([rng.random() for _ in range(seq_len)], dtype=jnp.float32)
+            self.jax_state = self.jax_state.replace(
+                exploit_detection_randoms=detection_seq,
+                exploit_detection_index=jnp.array(0, dtype=jnp.int32),
+                use_exploit_detection_randoms=jnp.array(True),
+            )
 
         self.step_count = 0
         self.red_known_ips = {}

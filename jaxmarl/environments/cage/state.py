@@ -117,8 +117,10 @@ class CageState:
     # CybORG: PrivilegeEscalate runs ExploreHost which finds OTService process, enabling Impact
     red_knows_ot_service: chex.Array   # (max_hosts,) bool: Red discovered OT service on this host
 
-    # Activity detection - tracks if exploit activity was detected by Monitor (for Remove)
+    # Activity detection - tracks if exploit activity was observed (for Blue observations)
     host_activity_detected: chex.Array  # (max_hosts,) bool: exploit activity detected by Monitor
+    # Actionable activity - tracks if Monitor observed suspicious PIDs (Remove can act)
+    host_activity_actionable: chex.Array  # (max_hosts,) bool: actionable exploit activity detected
 
     # Unknown observation state - set after Remove, cleared when new evidence arrives (e.g., Analyse malware)
     host_observation_unknown: chex.Array  # (max_hosts,) bool: observation should show "Unknown"
@@ -127,6 +129,8 @@ class CageState:
     # Cleared at start of each step, set by Red actions. Matches CybORG's transient activity detection.
     # Values: 0=None, 1=Scan (DiscoverNetworkServices), 2=Exploit (ExploitRemoteService)
     red_activity_this_step: chex.Array  # (max_hosts,) int: activity type this step
+    # Red actionable activity this step - True when exploit created suspicious PID (Remove can act)
+    red_activity_actionable_this_step: chex.Array  # (max_hosts,) bool
 
     # Malware presence - tracks detectable privilege escalation for Blue observations
     # In CybORG, Blue detects Privileged compromise via malware files (Density >= 0.9)
@@ -145,6 +149,13 @@ class CageState:
     last_red_action_type: chex.Array     # scalar int: 0=Sleep, 1=Discover, 2=Scan, 3=Exploit, 4=PrivEsc, 5=Impact
     last_red_action_target: chex.Array   # scalar int: target host index (-1 if no target)
     last_red_action_success: chex.Array  # scalar bool: whether Red's action succeeded
+
+    # Optional exploit detection RNG sequence for parity tests (Python random)
+    # When enabled, _apply_exploit will consume from exploit_detection_randoms
+    # instead of jax.random.uniform. This allows deterministic alignment with CybORG.
+    exploit_detection_randoms: chex.Array  # (max_steps,) float: precomputed randoms
+    exploit_detection_index: chex.Array    # scalar int: next index into exploit_detection_randoms
+    use_exploit_detection_randoms: chex.Array  # scalar bool: use sequence instead of JAX RNG
 
     # Valid privileged session tracking - matches CybORG's reward logic
     # CybORG only counts root on Linux, SYSTEM on Windows. Initial abstract sessions
@@ -449,13 +460,18 @@ def create_initial_state(const: CageConst) -> CageState:
         ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
         red_knows_ot_service=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_activity_actionable=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
         red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.int32),
+        red_activity_actionable_this_step=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_has_malware=jnp.zeros(num_hosts, dtype=jnp.bool_),
         host_malware_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
         last_red_action_type=jnp.array(0, dtype=jnp.int32),
         last_red_action_target=jnp.array(-1, dtype=jnp.int32),
         last_red_action_success=jnp.array(False),
+        exploit_detection_randoms=jnp.zeros(const.max_steps, dtype=jnp.float32),
+        exploit_detection_index=jnp.array(0, dtype=jnp.int32),
+        use_exploit_detection_randoms=jnp.array(False),
         host_has_valid_privesc=jnp.zeros(num_hosts, dtype=jnp.bool_),
     )
 

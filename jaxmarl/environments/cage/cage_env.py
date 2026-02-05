@@ -79,7 +79,7 @@ class CageEnv(MultiAgentEnv):
                 base_config=self.config,
             )
 
-        self.const = build_const_from_config(self.config)
+        self.const = build_const_from_config(self.config).replace(max_steps=max_steps)
         self.max_steps = max_steps
         self.resilience_gamma = resilience_gamma
 
@@ -159,7 +159,8 @@ class CageEnv(MultiAgentEnv):
         # Clear red activity AFTER Blue acts, BEFORE Red acts
         # This way Red's actions this step will be detected by Monitor next step
         state = state.replace(
-            red_activity_this_step=jnp.zeros_like(state.red_activity_this_step)
+            red_activity_this_step=jnp.zeros_like(state.red_activity_this_step),
+            red_activity_actionable_this_step=jnp.zeros_like(state.red_activity_actionable_this_step),
         )
 
         # Apply Red action (sets red_activity_this_step for this step's Monitor)

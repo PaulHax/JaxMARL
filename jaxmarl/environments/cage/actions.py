@@ -279,7 +279,7 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
 
     Tracks action success in state.last_blue_action_success:
     - Sleep, Monitor, Analyse, Restore: Always succeed
-    - Remove: Succeeds only if activity was detected AND access is user-level (not privileged)
+    - Remove: Succeeds only if actionable activity was detected AND access is user-level (not privileged)
     - Decoy: Succeeds only if port is available AND OS is compatible
 
     Failed actions get -0.1 penalty in compute_rewards (matching CybORG InvalidAction.cost).
@@ -290,9 +290,9 @@ def apply_blue_action(state: CageState, action: chex.Array, const: CageConst) ->
     action_type, target_host, decoy_type = decode_blue_action(action, const)
 
     # Compute success BEFORE applying action (need original state for Remove/Decoy checks)
-    # Remove success: activity detected AND user-level access (not privileged)
+    # Remove success: actionable activity detected AND user-level access (not privileged)
     remove_success = (
-        state.host_activity_detected[target_host] &
+        state.host_activity_actionable[target_host] &
         (state.red_privilege[target_host] == COMPROMISE_USER)
     )
 
@@ -364,10 +364,12 @@ def _apply_monitor(state: CageState, const: CageConst) -> CageState:
     """
     detected_exploit = state.red_activity_this_step == ACTIVITY_EXPLOIT
     new_detected = state.host_activity_detected | detected_exploit
+    new_actionable = state.host_activity_actionable | state.red_activity_actionable_this_step
     new_unknown = jnp.where(detected_exploit, False, state.host_observation_unknown)
 
     return state.replace(
         host_activity_detected=new_detected,
+        host_activity_actionable=new_actionable,
         host_observation_unknown=new_unknown,
     )
 
@@ -405,10 +407,10 @@ def _apply_remove(state: CageState, target_host: int) -> CageState:
     - Cannot remove root/SYSTEM (privileged) processes
     - Sets observation to "Unknown" after Remove
     """
-    was_detected = state.host_activity_detected[target_host]
+    was_detected = state.host_activity_actionable[target_host]
     is_user_level = state.red_privilege[target_host] == COMPROMISE_USER
 
-    # Remove only succeeds if activity was detected AND access is user-level (not privileged)
+    # Remove only succeeds if actionable activity was detected AND access is user-level (not privileged)
     can_remove = was_detected & is_user_level
 
     new_compromised = jnp.where(
@@ -664,6 +666,30 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
 EXPLOIT_DETECTION_RATE = 0.95
 
 
+def _sample_exploit_detection_random(
+    state: CageState,
+    key: chex.PRNGKey,
+) -> Tuple[chex.Array, CageState]:
+    """Sample detection random value.
+
+    If use_exploit_detection_randoms is enabled, consume from the precomputed
+    sequence (for CybORG parity). Otherwise, use jax.random.uniform.
+    """
+    use_seq = state.use_exploit_detection_randoms
+
+    def from_seq(s: CageState) -> Tuple[chex.Array, CageState]:
+        idx = s.exploit_detection_index
+        max_idx = s.exploit_detection_randoms.shape[0] - 1
+        rand = s.exploit_detection_randoms[idx]
+        new_idx = jnp.minimum(idx + 1, max_idx)
+        return rand, s.replace(exploit_detection_index=new_idx)
+
+    def from_key(s: CageState) -> Tuple[chex.Array, CageState]:
+        return jax.random.uniform(key), s
+
+    return jax.lax.cond(use_seq, from_seq, from_key, state)
+
+
 def _apply_exploit(
     state: CageState,
     target_host: int,
@@ -777,15 +803,27 @@ def _apply_exploit(
         state.host_has_valid_privesc[target_host],
     )
 
-    # Detection: 95% of exploits are detectable (matching CybORG's detection_rate = 0.95)
-    # 5% of exploits succeed silently and cannot be detected by Blue
-    is_detected = jax.random.uniform(key) < EXPLOIT_DETECTION_RATE
-
     # Log activity when Red attempts exploit on a valid target (real service OR decoy)
-    # This includes: successful exploit OR honeypot caught Red (decoy blocked)
+    # CybORG behavior:
+    # - Successful exploits are detected with probability 0.95
+    # - Decoy-triggered exploits always generate detectable activity
     attempted_on_target = has_route & has_target & host_known
-    activity_visible = attempted_on_target & is_detected
-    activity_scan = attempted_on_target & ~is_detected
+    decoy_attempt = attempted_on_target & decoy_present
+
+    def detect_success(s: CageState) -> Tuple[chex.Array, CageState]:
+        rand, new_state = _sample_exploit_detection_random(s, key)
+        return rand < EXPLOIT_DETECTION_RATE, new_state
+
+    detected_success, state = jax.lax.cond(
+        success,
+        detect_success,
+        lambda s: (jnp.array(False), s),
+        state,
+    )
+
+    activity_visible = decoy_attempt | (attempted_on_target & detected_success)
+    is_ssh = exploit_type == EXPLOIT_IDS['SSHBruteForce']
+    actionable_detected = success & detected_success & ~is_ssh
 
     # Set malware on successful exploit (CybORG creates cmd.exe/cmd.sh with density=0.9)
     new_malware = jnp.where(
@@ -800,11 +838,10 @@ def _apply_exploit(
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_has_valid_privesc=state.host_has_valid_privesc.at[target_host].set(new_valid_privesc),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
-            jnp.where(
-                activity_visible,
-                ACTIVITY_EXPLOIT,
-                jnp.where(activity_scan, ACTIVITY_SCAN, state.red_activity_this_step[target_host])
-            )
+            jnp.where(activity_visible, ACTIVITY_EXPLOIT, state.red_activity_this_step[target_host])
+        ),
+        red_activity_actionable_this_step=state.red_activity_actionable_this_step.at[target_host].set(
+            jnp.where(actionable_detected, True, state.red_activity_actionable_this_step[target_host])
         ),
         host_has_malware=state.host_has_malware.at[target_host].set(new_malware),
         last_red_action_success=success,
@@ -904,9 +941,9 @@ def get_blue_action_mask(state: CageState, const: CageConst) -> chex.Array:
     mask = jnp.ones(action_size, dtype=jnp.bool_)
     analyse_start, remove_start, decoy_start, restore_start = get_blue_action_offsets(const)
 
-    # Remove only valid if activity detected AND host has user-level (not privileged) access
+    # Remove only valid if actionable activity detected AND host has user-level (not privileged) access
     def check_remove(i, mask):
-        activity_detected = state.host_activity_detected[i]
+        activity_detected = state.host_activity_actionable[i]
         is_user_level = state.red_privilege[i] == COMPROMISE_USER
         remove_valid = activity_detected & is_user_level
         return mask.at[remove_start + i].set(remove_valid)

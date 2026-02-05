@@ -85,6 +85,7 @@ class TestBlueActions:
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
             host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
+            host_activity_actionable=foothold_state.host_activity_actionable.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
@@ -102,7 +103,7 @@ class TestBlueActions:
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER),
-            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(False),
+            host_activity_actionable=foothold_state.host_activity_actionable.at[HOST_IDS['Enterprise0']].set(False),
         )
 
         remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
@@ -118,7 +119,7 @@ class TestBlueActions:
             host_compromised=foothold_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
             red_sessions=foothold_state.red_sessions.at[HOST_IDS['Enterprise0']].set(1),
             red_privilege=foothold_state.red_privilege.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
-            host_activity_detected=foothold_state.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
+            host_activity_actionable=foothold_state.host_activity_actionable.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         remove_action = BLUE_REMOVE_START + HOST_IDS['Enterprise0']
@@ -262,14 +263,14 @@ class TestActionMasks:
 
         # Set up state with activity detected AND user-level access
         state_detected = state_user_access.replace(
-            host_activity_detected=state_user_access.host_activity_detected.at[HOST_IDS['Enterprise0']].set(True),
+            host_activity_actionable=state_user_access.host_activity_actionable.at[HOST_IDS['Enterprise0']].set(True),
         )
         mask_detected = get_blue_action_mask(state_detected, const)
         # Now Remove should be valid for Enterprise0 (user-level access + detected)
         assert mask_detected[BLUE_REMOVE_START + HOST_IDS['Enterprise0']]
         # User0 has PRIVILEGED access - Remove is NOT valid even with detection
         state_user0_detected = state_detected.replace(
-            host_activity_detected=state_detected.host_activity_detected.at[HOST_IDS['User0']].set(True),
+            host_activity_actionable=state_detected.host_activity_actionable.at[HOST_IDS['User0']].set(True),
         )
         mask_user0 = get_blue_action_mask(state_user0_detected, const)
         assert not mask_user0[BLUE_REMOVE_START + HOST_IDS['User0']]
