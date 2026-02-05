@@ -27,6 +27,14 @@ from jaxmarl.environments.cage import HeuristicRedCAGE
 from baselines.IPPO.ippo_ff_cage import ActorCritic, ActorCriticShared  # Network architecture
 
 
+HOST_NAMES = [
+    "Defender", "Enterprise0", "Enterprise1", "Enterprise2",
+    "Op_Host0", "Op_Host1", "Op_Host2", "Op_Server0",
+    "User0", "User1", "User2", "User3", "User4"
+]
+FEATURE_NAMES = ["activity_0", "activity_1", "compromised_0", "compromised_1"]
+
+
 def load_jax_policy(checkpoint_path: str):
     """Load trained JAX policy from checkpoint."""
     with open(checkpoint_path, 'rb') as f:
@@ -121,6 +129,35 @@ def compare_observations(jax_obs, cyborg_obs, step: int, tolerance: float = 1e-5
     return True, f"Match (max diff: {max_diff:.6f})"
 
 
+def format_blue_obs_diffs(jax_obs, cyborg_obs, tolerance: float = 1e-5) -> str:
+    """Format per-host observation diffs for Blue obs (4 features per host)."""
+    jax_obs_np = np.array(jax_obs)
+    cyborg_obs_np = np.array(cyborg_obs)
+
+    if jax_obs_np.shape != cyborg_obs_np.shape or jax_obs_np.size % 4 != 0:
+        return "  (obs shape mismatch, cannot decode per-host features)"
+
+    diff_indices = np.where(np.abs(jax_obs_np - cyborg_obs_np) > tolerance)[0]
+    if diff_indices.size == 0:
+        return "  (no feature-level diffs)"
+
+    by_host = {}
+    for idx in diff_indices:
+        host_idx = idx // 4
+        feat_idx = idx % 4
+        host_name = HOST_NAMES[host_idx] if host_idx < len(HOST_NAMES) else f"host_{host_idx}"
+        feat_name = FEATURE_NAMES[feat_idx]
+        by_host.setdefault(host_name, []).append(
+            f"{feat_name}: JAX={jax_obs_np[idx]:.2f} CybORG={cyborg_obs_np[idx]:.2f}"
+        )
+
+    lines = []
+    for host_name in sorted(by_host.keys()):
+        feats = "; ".join(by_host[host_name])
+        lines.append(f"  Host {host_name}: {feats}")
+    return "\n".join(lines)
+
+
 def decode_action(action_idx: int, num_hosts: int = 13) -> str:
     """Decode action index to human-readable string.
 
@@ -135,11 +172,7 @@ def decode_action(action_idx: int, num_hosts: int = 13) -> str:
     Host order (alphabetical): Defender, Enterprise0-2, Op_Host0-2, Op_Server0, User0-4
     Decoy order: Apache, Femitter, HarakaSMPT, Smss, SSHD, Svchost, Tomcat, Vsftpd
     """
-    host_names = [
-        "Defender", "Enterprise0", "Enterprise1", "Enterprise2",
-        "Op_Host0", "Op_Host1", "Op_Host2", "Op_Server0",
-        "User0", "User1", "User2", "User3", "User4"
-    ]
+    host_names = HOST_NAMES
     decoy_names = ["Apache", "Femitter", "HarakaSMPT", "Smss",
                    "SSHD", "Svchost", "Tomcat", "Vsftpd"]
     num_decoys = 8
@@ -248,6 +281,7 @@ def run_comparison(checkpoint_path: str, num_steps: int = 100, seed: int = 42,
 
             if not obs_match:
                 print(f"         *** OBSERVATION DIVERGENCE ***")
+                print(format_blue_obs_diffs(jax_obs, cyborg_obs))
                 divergences.append(('obs', step, obs_msg))
             if not reward_match:
                 print(f"         *** REWARD DIVERGENCE: JAX={jax_reward:.2f} vs CybORG={cyborg_reward:.2f} ***")

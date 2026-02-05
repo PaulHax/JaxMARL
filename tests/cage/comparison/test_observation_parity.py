@@ -5,7 +5,11 @@ Blue agent observations after various scenarios.
 """
 
 import pytest
-from tests.cage.differential.harness import DifferentialHarness, is_cyborg_available
+from tests.cage.differential.harness import (
+    DifferentialHarness,
+    is_cyborg_available,
+    sleep_policy,
+)
 from tests.cage.comparison.policies import (
     scripted_blue_policy_factory,
     scripted_red_policy_factory,
@@ -51,6 +55,24 @@ class TestObservationParity:
 
         assert abs(initial_step.cyborg_state.reward_blue - initial_step.jax_state.reward_blue) < 0.02, \
             f"Blue reward mismatch: CybORG={initial_step.cyborg_state.reward_blue}, JAX={initial_step.jax_state.reward_blue}"
+
+    @pytest.mark.xfail(reason="Known mismatch at blue_obs index 22 (Op_Host1 compromised_0)")
+    def test_blue_obs_index_22_parity(self):
+        """Targeted parity check for Blue obs index 22 (Op_Host1 compromised_0)."""
+        harness = DifferentialHarness(seed=42, max_steps=1, check_obs=True, verbose=False)
+
+        result = harness.run_bline_episode(sleep_policy, use_jax_bline=False)
+        step = result.step_results[0]
+
+        assert step.cyborg_state.blue_obs is not None
+        assert step.jax_state.blue_obs is not None
+
+        cyborg_val = float(step.cyborg_state.blue_obs[22])
+        jax_val = float(step.jax_state.blue_obs[22])
+
+        assert abs(cyborg_val - jax_val) < 1e-6, (
+            f"blue_obs[22] mismatch: CybORG={cyborg_val}, JAX={jax_val}"
+        )
 
     def test_observation_after_exploit(self):
         """CybORG vs JAX: Observation after Red exploit."""
