@@ -24,7 +24,7 @@ from CybORG.Agents.Wrappers import ChallengeWrapper
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from jaxmarl.environments.cage import HeuristicRedCAGE
-from baselines.IPPO.ippo_ff_cage import ActorCritic  # Network architecture
+from baselines.IPPO.ippo_ff_cage import ActorCritic, ActorCriticShared  # Network architecture
 
 
 def load_jax_policy(checkpoint_path: str):
@@ -56,6 +56,13 @@ def infer_hidden_dim(params):
     if dense0 is None:
         raise KeyError("Could not infer hidden_dim (Dense_0 not found in params)")
     return int(dense0['bias'].shape[0])
+
+
+def infer_network_type(params):
+    if isinstance(params, dict) and 'params' in params:
+        params = params['params']
+    num_dense = sum(1 for k in params.keys() if k.startswith('Dense_'))
+    return "shared" if num_dense == 4 else "separate"
 
 
 def create_jax_env(seed: int = 42):
@@ -161,13 +168,17 @@ def run_comparison(checkpoint_path: str, num_steps: int = 100, seed: int = 42,
     print(f"Loading checkpoint: {checkpoint_path}")
     params = load_jax_policy(checkpoint_path)
     hidden_dim = infer_hidden_dim(params)
+    network_type = infer_network_type(params)
 
     # Create network
     jax_env = create_jax_env(seed)
     obs_shape = jax_env.observation_space('blue').shape[0]
     action_dim = jax_env.action_space('blue').n
 
-    network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation="tanh")
+    if network_type == "shared":
+        network = ActorCriticShared(action_dim=action_dim, hidden_dim=hidden_dim, activation="tanh")
+    else:
+        network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation="tanh")
 
     # Initialize environments
     key = jax.random.PRNGKey(seed)

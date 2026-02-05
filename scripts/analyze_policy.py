@@ -15,18 +15,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from jaxmarl.environments.cage import HeuristicRedCAGE
 from jaxmarl.environments.cage.actions import get_blue_action_offsets
 
-class ActorCritic(nn.Module):
+class ActorCriticSeparate(nn.Module):
     action_dim: int
     hidden_dim: int = 64  # Will be overridden based on checkpoint
 
     @nn.compact
     def __call__(self, x):
-        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-        actor_mean = nn.tanh(actor_mean)
-        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor_mean)
-        actor_mean = nn.tanh(actor_mean)
-        actor_mean = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
-        pi = distrax.Categorical(logits=actor_mean)
+        actor = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        actor = nn.tanh(actor)
+        actor = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor)
+        actor = nn.tanh(actor)
+        actor = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor)
+        pi = distrax.Categorical(logits=actor)
 
         critic = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
         critic = nn.tanh(critic)
@@ -34,6 +34,33 @@ class ActorCritic(nn.Module):
         critic = nn.tanh(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(critic)
         return pi, jnp.squeeze(critic, axis=-1)
+
+
+class ActorCriticShared(nn.Module):
+    action_dim: int
+    hidden_dim: int = 64
+
+    @nn.compact
+    def __call__(self, x):
+        trunk = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        trunk = nn.tanh(trunk)
+        trunk = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(trunk)
+        trunk = nn.tanh(trunk)
+
+        logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(trunk)
+        pi = distrax.Categorical(logits=logits)
+
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(trunk)
+        return pi, jnp.squeeze(critic, axis=-1)
+
+
+def infer_network_config(params):
+    if isinstance(params, dict) and 'params' in params:
+        params = params['params']
+    num_dense = sum(1 for k in params.keys() if k.startswith('Dense_'))
+    hidden_dim = params['Dense_0']['bias'].shape[0]
+    network_type = "shared" if num_dense == 4 else "separate"
+    return network_type, int(hidden_dim)
 
 def get_action_name(action_idx, num_hosts=13):
     if action_idx == 0:
@@ -89,12 +116,15 @@ def analyze_policy(checkpoint_path: str, num_episodes: int = 10, top_k: int = 5)
     obs_dim = env.observation_spaces["blue"].shape[0]
     action_dim = env.action_spaces["blue"].n
 
-    # Detect hidden dim from checkpoint
+    # Detect network type and hidden dim from checkpoint
     params = ckpt['params'] if 'params' in ckpt else ckpt['runner_state'][0].params
-    hidden_dim = params['params']['Dense_0']['bias'].shape[0]
-    print(f"Detected hidden_dim={hidden_dim} from checkpoint")
+    network_type, hidden_dim = infer_network_config(params)
+    print(f"Detected network_type={network_type}, hidden_dim={hidden_dim} from checkpoint")
 
-    network = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim)
+    if network_type == "shared":
+        network = ActorCriticShared(action_dim=action_dim, hidden_dim=hidden_dim)
+    else:
+        network = ActorCriticSeparate(action_dim=action_dim, hidden_dim=hidden_dim)
 
     action_counts = np.zeros(action_dim)
     topk_counts = np.zeros(action_dim)

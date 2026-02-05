@@ -12,6 +12,7 @@
 "MAX_GRAD_NORM": 0.5
 "ACTIVATION": "tanh"
 "HIDDEN_DIM": 256
+"NETWORK_TYPE": "separate"
 "ENV_NAME": "HeuristicRedCAGE"
 "ENV_KWARGS":
   scenario: "Scenario2"

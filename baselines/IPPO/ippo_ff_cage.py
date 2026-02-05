@@ -112,6 +112,45 @@ class ActorCritic(nn.Module):
         return pi, jnp.squeeze(critic, axis=-1)
 
 
+class ActorCriticShared(nn.Module):
+    """Feedforward actor-critic with shared trunk (SB3-style)."""
+    action_dim: Sequence[int]
+    hidden_dim: int = 64
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, x, avail_actions=None):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        trunk = nn.Dense(
+            self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(x)
+        trunk = activation(trunk)
+        trunk = nn.Dense(
+            self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+        )(trunk)
+        trunk = activation(trunk)
+
+        action_logits = nn.Dense(
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+        )(trunk)
+
+        if avail_actions is not None:
+            unavail_actions = 1 - avail_actions
+            action_logits = action_logits - (unavail_actions * 1e10)
+
+        pi = distrax.Categorical(logits=action_logits)
+
+        critic = nn.Dense(
+            1, kernel_init=orthogonal(1.0), bias_init=constant(0.0)
+        )(trunk)
+
+        return pi, jnp.squeeze(critic, axis=-1)
+
+
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -150,10 +189,16 @@ def make_train(config):
         return config["LR"] * frac
 
     def train(rng):
-        network = ActorCritic(
+        network_type = config.get("NETWORK_TYPE", "separate")
+        if network_type == "shared":
+            network_cls = ActorCriticShared
+        else:
+            network_cls = ActorCritic
+
+        network = network_cls(
             env.action_space(env.agents[0]).n,
             hidden_dim=config.get("HIDDEN_DIM", 64),
-            activation=config["ACTIVATION"]
+            activation=config["ACTIVATION"],
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env.agents[0]).shape)
@@ -193,7 +238,7 @@ def make_train(config):
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
                 env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
-                env_act = {k: v.squeeze() for k, v in env_act.items()}
+                env_act = {k: v.squeeze(-1) for k, v in env_act.items()}
 
                 rng, _rng = jax.random.split(rng)
                 rng_step = jax.random.split(_rng, config["NUM_ENVS"])
@@ -423,6 +468,7 @@ def main(config):
         "max_grad_norm": config["MAX_GRAD_NORM"],
         "hidden_dim": config.get("HIDDEN_DIM", 64),
         "activation": config["ACTIVATION"],
+        "network_type": config.get("NETWORK_TYPE", "separate"),
         "anneal_lr": config["ANNEAL_LR"],
         "env_name": config["ENV_NAME"],
         "scenario": config["ENV_KWARGS"].get("scenario", "Scenario2"),
@@ -442,6 +488,7 @@ def main(config):
     print(f"Num steps: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 64)}")
     print(f"Activation: {config['ACTIVATION']}")
+    print(f"Network type: {config.get('NETWORK_TYPE', 'separate')}")
     print(f"Ent coef: {config['ENT_COEF']}")
     print(f"Seeds: {config.get('NUM_SEEDS', 1)}")
     print(f"Experiment dir: {save_dir}")
