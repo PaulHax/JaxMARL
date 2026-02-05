@@ -24,6 +24,7 @@ from tests.cage.comparison.scenarios import (
     EXPLOIT_SSH,
 )
 from jaxmarl.environments.cage.actions import BLUE_SLEEP, BLUE_MONITOR
+from jaxmarl.environments.cage.state import HOST_IDS, ACTIVITY_EXPLOIT
 
 
 requires_cyborg = pytest.mark.skipif(
@@ -80,6 +81,49 @@ class TestRemovePenaltyCybORGParity:
 
         assert remove_step.jax_state.red_privilege.get('User1', 0) == 1, \
             "SSH exploit does not create actionable PIDs in CybORG; Remove should fail and leave user access"
+
+    def test_ssh_exploit_observed_but_not_actionable(self):
+        """SSH exploit should be observed (activity bits), but Remove still fails."""
+        harness = DifferentialHarness(seed=42, max_steps=10, verbose=False, check_obs=True, sync_detection_rng=True)
+
+        red_actions = [
+            red_discover_subnet(SUBNET_USER),
+            red_scan_host('User1'),
+            red_exploit_host('User1', EXPLOIT_SSH),
+            0,  # Sleep
+            0,  # Sleep
+        ]
+
+        blue_actions = [
+            BLUE_MONITOR,
+            BLUE_MONITOR,
+            BLUE_MONITOR,
+            BLUE_MONITOR,  # Monitor AFTER Exploit to detect activity
+            blue_remove_host('User1'),
+        ]
+
+        red_policy = scripted_red_policy_factory(red_actions)
+        blue_policy = scripted_blue_policy_factory(blue_actions)
+
+        harness.reset()
+        # Run through exploit step
+        for step in range(3):
+            harness.step(blue_actions[step], red_actions[step])
+
+        jax_user1 = HOST_IDS['User1']
+        assert int(harness.jax_state.red_activity_this_step[jax_user1]) == ACTIVITY_EXPLOIT, \
+            "JAX should mark exploit activity for User1 during SSH brute force"
+
+        # Monitor after exploit should record observation but no actionable PID
+        harness.step(blue_actions[3], red_actions[3])
+        assert bool(harness.jax_state.host_activity_detected[jax_user1]), \
+            "JAX should record observed activity for User1 after SSH brute force"
+        assert not bool(harness.jax_state.host_activity_actionable[jax_user1]), \
+            "SSH exploit should not create actionable PIDs for Remove"
+
+        # Remove should still fail (CybORG parity)
+        remove_step = harness.step(blue_actions[4], red_actions[4])
+        assert remove_step.jax_state.red_privilege.get('User1', 0) == 1
 
     def test_remove_on_privileged_compromise_no_extra_penalty(self):
         """CybORG vs JAX: Remove on PRIVILEGED host - verify no extra penalty.
