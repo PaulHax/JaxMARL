@@ -6,6 +6,7 @@ environments and detect discrepancies.
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Tuple
+from ipaddress import IPv4Address
 import numpy as np
 import jax.numpy as jnp
 
@@ -70,10 +71,63 @@ def get_host_ids(config: Optional[ScenarioConfig] = None) -> Dict[str, int]:
     return HOST_IDS
 
 
+def _build_ip_to_host_map(cyborg_env) -> Dict[str, str]:
+    """Build mapping from IP string to hostname for CybORG state."""
+    ip_to_host: Dict[str, str] = {}
+    try:
+        state = cyborg_env.environment_controller.state
+        for ip_addr, host in getattr(state, "ip_addresses", {}).items():
+            ip_to_host[str(ip_addr)] = host
+    except Exception:
+        pass
+
+    try:
+        host_to_ip = getattr(cyborg_env.environment_controller, "hostname_ip_map", None)
+        if host_to_ip:
+            for host, ip_addr in host_to_ip.items():
+                ip_to_host[str(ip_addr)] = host
+    except Exception:
+        pass
+
+    return ip_to_host
+
+
+def _normalize_host_key(
+    key: Any,
+    host_ids: Dict[str, int],
+    ip_to_host: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Resolve observation key to hostname (handles IP strings)."""
+    if key in host_ids:
+        return key
+
+    if ip_to_host:
+        if key in ip_to_host:
+            return ip_to_host[key]
+        try:
+            ip_str = str(key)
+            if ip_str in ip_to_host:
+                return ip_to_host[ip_str]
+        except Exception:
+            pass
+
+        try:
+            ip_obj = IPv4Address(str(key))
+            ip_str = str(ip_obj)
+            if ip_str in ip_to_host:
+                return ip_to_host[ip_str]
+        except Exception:
+            pass
+
+    return None
+
+
 def extract_cyborg_state(
     cyborg_env,
     config: Optional[ScenarioConfig] = None,
     include_obs: bool = True,
+    discovered_hosts_override: Optional[set] = None,
+    scanned_hosts_override: Optional[set] = None,
 ) -> StateSnapshot:
     """Extract comprehensive state from CybORG environment.
 
@@ -96,6 +150,8 @@ def extract_cyborg_state(
         snapshot.red_scanned_hosts[hostname] = False
         snapshot.host_activity_detected[hostname] = False
         snapshot.ot_service_stopped[hostname] = False
+
+    ip_to_host = _build_ip_to_host_map(cyborg_env)
 
     try:
         state = cyborg_env.environment_controller.state
@@ -125,14 +181,29 @@ def extract_cyborg_state(
     except Exception:
         pass
 
-    red_state = cyborg_env.get_agent_state('Red')
-    for hostname in host_ids.keys():
-        if hostname in red_state and isinstance(red_state[hostname], dict):
-            host_info = red_state[hostname]
+    red_obs = cyborg_env.get_observation('Red')
+    if red_obs:
+        for key, host_info in red_obs.items():
+            if key == 'success':
+                continue
+            hostname = _normalize_host_key(key, host_ids, ip_to_host)
+            if not hostname or not isinstance(host_info, dict):
+                continue
 
             if 'Interface' in host_info:
                 snapshot.red_discovered_hosts[hostname] = True
             if 'Processes' in host_info or 'Services' in host_info:
+                snapshot.red_scanned_hosts[hostname] = True
+            if 'Sessions' in host_info:
+                snapshot.red_discovered_hosts[hostname] = True
+
+    if discovered_hosts_override:
+        for hostname in discovered_hosts_override:
+            if hostname in host_ids:
+                snapshot.red_discovered_hosts[hostname] = True
+    if scanned_hosts_override:
+        for hostname in scanned_hosts_override:
+            if hostname in host_ids:
                 snapshot.red_scanned_hosts[hostname] = True
 
     rewards = cyborg_env.get_rewards()
@@ -175,7 +246,7 @@ def extract_cyborg_state(
 
         try:
             red_obs_dict = cyborg_env.get_observation('Red')
-            snapshot.red_obs = _convert_cyborg_red_obs(red_obs_dict, config)
+            snapshot.red_obs = _convert_cyborg_red_obs(red_obs_dict, config, ip_to_host)
         except Exception:
             pass
 
@@ -222,6 +293,7 @@ def _convert_cyborg_blue_obs(
 def _convert_cyborg_red_obs(
     obs_dict: dict,
     config: Optional[ScenarioConfig] = None,
+    ip_to_host: Optional[Dict[str, str]] = None,
 ) -> Optional[np.ndarray]:
     """Convert CybORG red observation dict to array format."""
     if obs_dict is None:
@@ -233,10 +305,18 @@ def _convert_cyborg_red_obs(
     success = obs_dict.get('success', True)
     obs[0] = 1.0 if success else 0.0
 
+    normalized = {}
+    for key, host_data in obs_dict.items():
+        if key == 'success':
+            continue
+        hostname = _normalize_host_key(key, host_ids, ip_to_host)
+        if hostname:
+            normalized[hostname] = host_data
+
     for hostname, host_idx in host_ids.items():
         base_idx = 1 + host_idx * 3
-        if hostname in obs_dict:
-            host_data = obs_dict[hostname]
+        if hostname in normalized:
+            host_data = normalized[hostname]
             if isinstance(host_data, dict):
                 if 'Processes' in host_data or 'Services' in host_data:
                     obs[base_idx] = 1.0

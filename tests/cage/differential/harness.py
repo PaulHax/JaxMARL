@@ -250,8 +250,17 @@ class DifferentialHarness:
 
         self.step_count = 0
         self.red_known_ips = {}
+        self.red_discovered_hosts = set()
+        self.red_scanned_hosts = set()
+        self._update_known_ips_from_observation()
 
-        cyborg_state = extract_cyborg_state(self.cyborg_env, config=self.config, include_obs=self.check_obs)
+        cyborg_state = extract_cyborg_state(
+            self.cyborg_env,
+            config=self.config,
+            include_obs=self.check_obs,
+            discovered_hosts_override=self.red_discovered_hosts,
+            scanned_hosts_override=self.red_scanned_hosts,
+        )
         jax_state = extract_jax_state(self.jax_state, self.jax_env.const, config=self.config, include_obs=self.check_obs)
 
         return cyborg_state, jax_state
@@ -267,6 +276,10 @@ class DifferentialHarness:
             ip_str = str(ip)
             if ip_str in obs:
                 self.red_known_ips[hostname] = ip
+                self.red_discovered_hosts.add(hostname)
+                host_info = obs.get(ip_str, {})
+                if isinstance(host_info, dict) and ('Processes' in host_info or 'Services' in host_info):
+                    self.red_scanned_hosts.add(hostname)
 
     def step(
         self,
@@ -309,7 +322,13 @@ class DifferentialHarness:
 
         self.step_count += 1
 
-        cyborg_state = extract_cyborg_state(self.cyborg_env, config=self.config, include_obs=self.check_obs)
+        cyborg_state = extract_cyborg_state(
+            self.cyborg_env,
+            config=self.config,
+            include_obs=self.check_obs,
+            discovered_hosts_override=self.red_discovered_hosts,
+            scanned_hosts_override=self.red_scanned_hosts,
+        )
         cyborg_state.reward_blue = cyborg_blue_reward
         cyborg_state.reward_red = cyborg_red_reward
 
@@ -476,6 +495,7 @@ class DifferentialHarness:
 
                     # Step Red to complete the timestep
                     self.cyborg_env.step('Red', cyborg_red_action)
+                    self._update_known_ips_from_observation()
 
                     # Get state-based rewards after both steps, then add Blue's action cost
                     cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
@@ -497,7 +517,11 @@ class DifferentialHarness:
                     self.step_count += 1
 
                     cyborg_state_snap = extract_cyborg_state(
-                        self.cyborg_env, config=self.config, include_obs=self.check_obs
+                        self.cyborg_env,
+                        config=self.config,
+                        include_obs=self.check_obs,
+                        discovered_hosts_override=self.red_discovered_hosts,
+                        scanned_hosts_override=self.red_scanned_hosts,
                     )
                     cyborg_state_snap.reward_blue = cyborg_blue_reward
                     cyborg_state_snap.reward_red = cyborg_red_reward
@@ -598,6 +622,7 @@ class DifferentialHarness:
                 blue_action_cost = blue_cyborg.cost if hasattr(blue_cyborg, 'cost') else 0
 
                 self.cyborg_env.step('Red', cyborg_red_action)
+                self._update_known_ips_from_observation()
 
                 cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
                 cyborg_red_reward = self.cyborg_env.get_rewards()['Red']
@@ -618,7 +643,11 @@ class DifferentialHarness:
                 self.step_count += 1
 
                 cyborg_state_snap = extract_cyborg_state(
-                    self.cyborg_env, config=self.config, include_obs=self.check_obs
+                    self.cyborg_env,
+                    config=self.config,
+                    include_obs=self.check_obs,
+                    discovered_hosts_override=self.red_discovered_hosts,
+                    scanned_hosts_override=self.red_scanned_hosts,
                 )
                 cyborg_state_snap.reward_blue = cyborg_blue_reward
                 cyborg_state_snap.reward_red = cyborg_red_reward
