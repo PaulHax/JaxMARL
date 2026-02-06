@@ -13,7 +13,7 @@ from flax.linen.initializers import constant, orthogonal
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from jaxmarl.environments.cage import HeuristicRedCAGE
-from jaxmarl.environments.cage.actions import get_blue_action_offsets
+from jaxmarl.environments.cage.actions import get_blue_action_offsets, blue_action_label, blue_action_type
 
 class ActorCriticSeparate(nn.Module):
     action_dim: int
@@ -63,49 +63,12 @@ def infer_network_config(params):
     return network_type, int(hidden_dim)
 
 def get_action_name(action_idx, num_hosts=13):
-    if action_idx == 0:
-        return "Sleep"
-    elif action_idx == 1:
-        return "Monitor"
-    base = 2
-    if action_idx < base + num_hosts:
-        return f"Analyse({action_idx - base})"
-    base += num_hosts
-    if action_idx < base + num_hosts:
-        return f"Remove({action_idx - base})"
-    base += num_hosts
-    num_decoys = 8  # 8 decoy types in CAGE, not 10
-    total_decoy = num_hosts * num_decoys
-    if action_idx < base + total_decoy:
-        rel = action_idx - base
-        host = rel // num_decoys
-        decoy = rel % num_decoys
-        return f"Decoy({host},{decoy})"
-    base += total_decoy
-    if action_idx < base + num_hosts:
-        return f"Restore({action_idx - base})"
-    return f"Unknown({action_idx})"
+    return blue_action_label(action_idx, num_hosts)
 
 def _action_type(action_idx, num_hosts=13):
-    if action_idx == 0:
-        return "Sleep"
-    elif action_idx == 1:
-        return "Monitor"
-    base = 2
-    if action_idx < base + num_hosts:
-        return "Analyse"
-    base += num_hosts
-    if action_idx < base + num_hosts:
-        return "Remove"
-    base += num_hosts
-    num_decoys = 8
-    total_decoy = num_hosts * num_decoys
-    if action_idx < base + total_decoy:
-        return "Decoy"
-    base += total_decoy
-    if action_idx < base + num_hosts:
-        return "Restore"
-    return "Unknown"
+    from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
+    type_idx = blue_action_type(action_idx, num_hosts)
+    return BLUE_ACTION_NAMES[type_idx] if type_idx < len(BLUE_ACTION_NAMES) else "Unknown"
 
 
 def analyze_policy(checkpoint_path: str, num_episodes: int = 10, top_k: int = 5):

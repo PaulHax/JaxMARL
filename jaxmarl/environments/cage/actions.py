@@ -69,7 +69,7 @@ DECOY_SERVICE_IDS = jnp.array([
     SERVICE_IDS['ftp'],     # DecoyVsftpd (port 21)
 ], dtype=jnp.int32)
 
-# Default action space sizes for backward compatibility (Scenario 2 with 13 hosts)
+# Scenario2-only constants. For other scenarios use compute_*() functions or get_*_action_offsets().
 NUM_HOSTS = 13
 NUM_SUBNETS = 3
 NUM_SERVICES = 10
@@ -456,9 +456,7 @@ def _apply_restore(state: CageState, target_host: int, const: CageConst) -> Cage
     the initial foothold on User0 (host index 8). This matches CybORG tests
     where PrivEsc fails after Restore on exploited hosts, but succeeds on User0.
     """
-    from jaxmarl.environments.cage.state import HOST_IDS
-
-    is_initial_foothold = target_host == HOST_IDS['User0']
+    is_initial_foothold = jnp.any(const.red_start_hosts == target_host)
 
     new_sessions = jax.lax.cond(
         is_initial_foothold,
@@ -1084,3 +1082,51 @@ def decode_red_action_name(action: int, const: CageConst) -> str:
     else:  # PrivilegeEscalate, Impact
         host_name = HOST_NAMES.get(target_host, f"Host{target_host}")
         return f"{type_name}@{host_name}"
+
+
+def blue_action_type(action: int, num_hosts: int = 13) -> int:
+    """Map blue action index to type index. Lightweight version not requiring CageConst.
+
+    Returns index into BLUE_ACTION_NAMES: 0=Sleep, 1=Monitor, 2=Analyse, 3=Remove, 4=Restore, 5=Decoy
+    """
+    analyse_start = 2
+    remove_start = analyse_start + num_hosts
+    decoy_start = remove_start + num_hosts
+    restore_start = decoy_start + num_hosts * NUM_DECOY_TYPES
+
+    if action == 0:
+        return 0
+    elif action == 1:
+        return 1
+    elif analyse_start <= action < remove_start:
+        return 2
+    elif remove_start <= action < decoy_start:
+        return 3
+    elif decoy_start <= action < restore_start:
+        return 5
+    else:
+        return 4
+
+
+def blue_action_label(action: int, num_hosts: int = 13) -> str:
+    """Human-readable label for blue action. Lightweight version not requiring CageConst."""
+    analyse_start = 2
+    remove_start = analyse_start + num_hosts
+    decoy_start = remove_start + num_hosts
+    restore_start = decoy_start + num_hosts * NUM_DECOY_TYPES
+
+    if action == 0:
+        return "Sleep"
+    elif action == 1:
+        return "Monitor"
+    elif analyse_start <= action < remove_start:
+        return f"Analyse({action - analyse_start})"
+    elif remove_start <= action < decoy_start:
+        return f"Remove({action - remove_start})"
+    elif decoy_start <= action < restore_start:
+        rel = action - decoy_start
+        return f"Decoy({rel // NUM_DECOY_TYPES},{rel % NUM_DECOY_TYPES})"
+    elif restore_start <= action < restore_start + num_hosts:
+        return f"Restore({action - restore_start})"
+    else:
+        return f"Unknown({action})"

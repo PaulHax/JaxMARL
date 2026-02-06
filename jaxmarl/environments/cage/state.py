@@ -3,12 +3,11 @@
 import jax.numpy as jnp
 from flax import struct
 import chex
-from typing import Dict, Optional
 
 from jaxmarl.environments.cage.config import ScenarioConfig, create_scenario2_config
 
 
-# Default constants for backward compatibility (Scenario 2)
+# Scenario2-only constants. For other scenarios use build_const_from_config().
 NUM_HOSTS = 13
 NUM_SUBNETS = 3
 NUM_SERVICES = 10
@@ -16,7 +15,7 @@ NUM_EXPLOITS = 8
 NUM_DECOY_TYPES = 8
 MAX_PROCESSES = 20
 
-# Host IDs (Scenario 2) - alphabetical order to match CybORG
+# Scenario2-only host IDs (alphabetical order to match CybORG)
 HOST_IDS = {
     'Defender': 0, 'Enterprise0': 1, 'Enterprise1': 2, 'Enterprise2': 3,
     'Op_Host0': 4, 'Op_Host1': 5, 'Op_Host2': 6, 'Op_Server0': 7,

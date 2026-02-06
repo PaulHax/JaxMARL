@@ -277,6 +277,7 @@ class TestObservationEncodingEquivalence:
             red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[host_idx].set(True),
             red_sessions=state.red_sessions.at[host_idx].set(1),
             host_compromised=state.host_compromised.at[host_idx].set(COMPROMISE_USER),
+            host_activity_detected=state.host_activity_detected.at[host_idx].set(True),
             red_activity_this_step=state.red_activity_this_step.at[host_idx].set(ACTIVITY_EXPLOIT),
         )
         obs = get_blue_obs(state, env.const)
@@ -387,7 +388,8 @@ class TestRewardEquivalence:
         state = create_initial_state(const)
 
         state = state.replace(
-            host_compromised=state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         rewards = compute_rewards_simple(state, const)
@@ -406,6 +408,7 @@ class TestRewardEquivalence:
         # Privileged access + Impact (OT service stopped) for availability reward
         state = state.replace(
             host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS['Op_Server0']].set(True),
             ot_service_stopped=state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
         )
 

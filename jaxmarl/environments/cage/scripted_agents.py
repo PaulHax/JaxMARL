@@ -130,17 +130,18 @@ class BLineState:
     target_user_idx: chex.Array  # Which User host to attack (index into bline_user_hosts)
 
 
-def bline_reset(key: chex.PRNGKey = None) -> BLineState:
+def bline_reset(key: chex.PRNGKey = None, num_users: int = 4) -> BLineState:
     """Reset B_lineAgent state to initial FSM state 0.
 
     Args:
         key: Random key for selecting target User host. If None, defaults to User1 (idx 0).
              CybORG's B_lineAgent randomly selects which User host to attack.
+        num_users: Number of attackable User hosts (excludes User0).
     """
     if key is None:
         target_user_idx = jnp.array(0, dtype=jnp.int32)
     else:
-        target_user_idx = jax.random.randint(key, (), 0, 4)
+        target_user_idx = jax.random.randint(key, (), 0, num_users)
     return BLineState(
         fsm_state=jnp.array(0, dtype=jnp.int32),
         last_action_success=jnp.array(True, dtype=jnp.bool_),
@@ -348,12 +349,13 @@ def bline_get_action_batched(
     )
 
 
-def bline_reset_batched(batch_size: int, key: chex.PRNGKey = None) -> BLineState:
+def bline_reset_batched(batch_size: int, key: chex.PRNGKey = None, num_users: int = 4) -> BLineState:
     """Create batched initial BLineState with random User targets.
 
     Args:
         batch_size: Number of parallel environments
         key: Random key for selecting target User hosts. If None, all target User1.
+        num_users: Number of attackable User hosts (excludes User0).
 
     Returns:
         BLineState with batched arrays
@@ -361,7 +363,7 @@ def bline_reset_batched(batch_size: int, key: chex.PRNGKey = None) -> BLineState
     if key is None:
         target_user_idx = jnp.zeros(batch_size, dtype=jnp.int32)
     else:
-        target_user_idx = jax.random.randint(key, (batch_size,), 0, 4)
+        target_user_idx = jax.random.randint(key, (batch_size,), 0, num_users)
     return BLineState(
         fsm_state=jnp.zeros(batch_size, dtype=jnp.int32),
         last_action_success=jnp.ones(batch_size, dtype=jnp.bool_),

@@ -168,7 +168,7 @@ def collect_rollout(key, env, states, train_state_blue, bline_states, num_steps=
 
         # Reset B_lineAgent state when episode ends (with random user target)
         batch_size = env_states.time.shape[0]
-        reset_bline = bline_reset_batched(batch_size, key_bline_reset)
+        reset_bline = bline_reset_batched(batch_size, key_bline_reset, num_users=env.const.bline_user_hosts.shape[0])
         new_bline_states = BLineState(
             fsm_state=jnp.where(dones['__all__'], reset_bline.fsm_state, new_bline_states.fsm_state),
             last_action_success=jnp.where(dones['__all__'], reset_bline.last_action_success, new_bline_states.last_action_success),
@@ -655,7 +655,7 @@ def train(args):
     _, env_states = jax.vmap(env.reset)(env_keys)
 
     # Initialize B_lineAgent states with random user targets
-    bline_states = bline_reset_batched(args.num_envs, key_bline)
+    bline_states = bline_reset_batched(args.num_envs, key_bline, num_users=env.const.bline_user_hosts.shape[0])
 
     total_steps = 0
     last_eval_step = 0
@@ -841,7 +841,8 @@ def train(args):
 
     run_final_cyborg_eval(
         str(checkpoint_path), args.cyborg_path, mlflow, total_steps,
-        export_dir=str(exp_dir), episodes=args.eval_episodes, steps=100, seed=args.seed
+        export_dir=str(exp_dir), episodes=args.eval_episodes, steps=100, seed=args.seed,
+        scenario=args.scenario
     )
 
     return train_state_blue

@@ -18,48 +18,14 @@ from jaxmarl.environments.cage import HeuristicRedCAGE
 
 
 def action_type(action_idx: int, num_hosts: int) -> str:
-    if action_idx == 0:
-        return "Sleep"
-    elif action_idx == 1:
-        return "Monitor"
-    # Offsets: Sleep, Monitor, Analyse, Remove, Decoy, Restore
-    analyse_start = 2
-    remove_start = analyse_start + num_hosts
-    decoy_start = remove_start + num_hosts
-    restore_start = decoy_start + (num_hosts * 8)
-    if action_idx < remove_start:
-        return "Analyse"
-    elif action_idx < decoy_start:
-        return "Remove"
-    elif action_idx < restore_start:
-        return "Decoy"
-    else:
-        return "Restore"
+    from jaxmarl.environments.cage.actions import blue_action_type, BLUE_ACTION_NAMES
+    type_idx = blue_action_type(action_idx, num_hosts)
+    return BLUE_ACTION_NAMES[type_idx] if type_idx < len(BLUE_ACTION_NAMES) else "Unknown"
 
 
 def decode_action(action_idx: int, num_hosts: int = 13) -> str:
-    if action_idx == 0:
-        return "Sleep"
-    elif action_idx == 1:
-        return "Monitor"
-    base = 2
-    if action_idx < base + num_hosts:
-        return f"Analyse({action_idx - base})"
-    base += num_hosts
-    if action_idx < base + num_hosts:
-        return f"Remove({action_idx - base})"
-    base += num_hosts
-    num_decoys = 8
-    total_decoy = num_hosts * num_decoys
-    if action_idx < base + total_decoy:
-        rel = action_idx - base
-        host = rel // num_decoys
-        decoy = rel % num_decoys
-        return f"Decoy({host},{decoy})"
-    base += total_decoy
-    if action_idx < base + num_hosts:
-        return f"Restore({action_idx - base})"
-    return f"Unknown({action_idx})"
+    from jaxmarl.environments.cage.actions import blue_action_label
+    return blue_action_label(action_idx, num_hosts)
 
 
 def eval_sb3(model_path: str, episodes: int, steps: int, seed: int, deterministic: bool):

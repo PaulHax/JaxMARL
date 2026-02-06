@@ -159,39 +159,9 @@ def format_blue_obs_diffs(jax_obs, cyborg_obs, tolerance: float = 1e-5) -> str:
 
 
 def decode_action(action_idx: int, num_hosts: int = 13) -> str:
-    """Decode action index to human-readable string.
-
-    CybORG action layout (matching JAX):
-    - 0: Sleep
-    - 1: Monitor
-    - 2-14: Analyse (13 hosts)
-    - 15-27: Remove (13 hosts)
-    - 28-131: Decoy (8 types × 13 hosts, decoy_type first then host)
-    - 132-144: Restore (13 hosts)
-
-    Host order (alphabetical): Defender, Enterprise0-2, Op_Host0-2, Op_Server0, User0-4
-    Decoy order: Apache, Femitter, HarakaSMPT, Smss, SSHD, Svchost, Tomcat, Vsftpd
-    """
-    host_names = HOST_NAMES
-    decoy_names = ["Apache", "Femitter", "HarakaSMPT", "Smss",
-                   "SSHD", "Svchost", "Tomcat", "Vsftpd"]
-    num_decoys = 8
-
-    if action_idx == 0:
-        return "Sleep"
-    elif action_idx == 1:
-        return "Monitor"
-    elif action_idx < 2 + num_hosts:  # 2-14
-        return f"Analyse({host_names[action_idx - 2]})"
-    elif action_idx < 2 + 2 * num_hosts:  # 15-27
-        return f"Remove({host_names[action_idx - 2 - num_hosts]})"
-    elif action_idx < 2 + 2 * num_hosts + num_decoys * num_hosts:  # 28-131
-        decoy_offset = action_idx - 2 - 2 * num_hosts
-        decoy_type = decoy_offset // num_hosts
-        host_idx = decoy_offset % num_hosts
-        return f"Decoy{decoy_names[decoy_type]}({host_names[host_idx]})"
-    else:  # 132-144
-        return f"Restore({host_names[action_idx - 2 - 2 * num_hosts - num_decoys * num_hosts]})"
+    """Decode action index to human-readable string."""
+    from jaxmarl.environments.cage.actions import blue_action_label
+    return blue_action_label(action_idx, num_hosts)
 
 
 def run_comparison(checkpoint_path: str, num_steps: int = 100, seed: int = 42,

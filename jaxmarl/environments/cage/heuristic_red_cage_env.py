@@ -67,7 +67,7 @@ class HeuristicRedCAGE(HeuristicBaseCAGE):
         """Reset environment and B_lineAgent state with random user target."""
         key, env_key, bline_key = jax.random.split(key, 3)
         obs, env_state = self._env.reset(env_key)
-        red_policy_state = bline_reset(bline_key)  # Random user target
+        red_policy_state = bline_reset(bline_key, num_users=self.const.bline_user_hosts.shape[0])
 
         blue_obs = self._blue_obs(obs)
 
@@ -114,7 +114,7 @@ class HeuristicRedCAGE(HeuristicBaseCAGE):
         # Reset B_lineAgent with random user target on episode end
         new_red_policy_state = jax.lax.cond(
             dones['__all__'],
-            lambda k: bline_reset(k),
+            lambda k: bline_reset(k, num_users=self.const.bline_user_hosts.shape[0]),
             lambda _: new_red_policy_state,
             reset_key
         )

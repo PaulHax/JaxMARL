@@ -3,15 +3,9 @@
 import sys
 from pathlib import Path
 
-from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES
+from jaxmarl.environments.cage.actions import BLUE_ACTION_NAMES, blue_action_type
 
 CYBORG_AVAILABLE = False
-
-NUM_HOSTS = 13
-BLUE_ANALYSE_START = 2
-BLUE_REMOVE_START = 15
-BLUE_DECOY_START = 28
-BLUE_RESTORE_START = 132
 
 JAX_TO_CYBORG_SCENARIO = {
     'Scenario2': 'Scenario2',
@@ -22,22 +16,6 @@ JAX_TO_CYBORG_SCENARIO = {
 }
 
 SCALABILITY_SCENARIOS = {'hosts_2', 'hosts_3', 'hosts_4', 'hosts_5'}
-
-
-def action_to_type(action: int) -> int:
-    """Map action index to action type for BLUE_ACTION_NAMES."""
-    if action == 0:
-        return 0  # Sleep
-    elif action == 1:
-        return 1  # Monitor
-    elif BLUE_ANALYSE_START <= action < BLUE_REMOVE_START:
-        return 2  # Analyse
-    elif BLUE_REMOVE_START <= action < BLUE_DECOY_START:
-        return 3  # Remove
-    elif BLUE_DECOY_START <= action < BLUE_RESTORE_START:
-        return 5  # Decoy
-    else:
-        return 4  # Restore
 
 
 def setup_cyborg_eval(cyborg_path: str):
@@ -130,13 +108,15 @@ def evaluate_in_cyborg(checkpoint_path: str, cyborg_path: str, episodes: int = 1
     action_counts = {name: 0 for name in BLUE_ACTION_NAMES}
     total_actions = 0
 
+    num_hosts = agent.obs_dim // 4
+
     if track_actions:
         original_get_action = agent.get_action
 
         def tracked_get_action(*args, **kwargs):
             nonlocal total_actions
             action = original_get_action(*args, **kwargs)
-            action_type = action_to_type(action)
+            action_type = blue_action_type(action, num_hosts)
             if action_type < len(BLUE_ACTION_NAMES):
                 action_counts[BLUE_ACTION_NAMES[action_type]] += 1
                 total_actions += 1

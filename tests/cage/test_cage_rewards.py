@@ -57,7 +57,8 @@ class TestBasicRewards:
         """Privileged compromise gives full host confidentiality value."""
         # Compromise Enterprise0 with privileged access (value = 1.0)
         state = initial_state.replace(
-            host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=initial_state.host_has_valid_privesc.at[HOST_IDS['Enterprise0']].set(True),
         )
 
         rewards = compute_rewards_simple(state, const)
@@ -79,7 +80,8 @@ class TestZeroSum:
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_USER)
         )
         state = state.replace(
-            host_compromised=state.host_compromised.at[HOST_IDS['Enterprise1']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=state.host_compromised.at[HOST_IDS['Enterprise1']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS['Enterprise1']].set(True),
         )
 
         rewards = compute_rewards_simple(state, const)
@@ -92,7 +94,8 @@ class TestOpServerReward:
         """Availability reward requires Impact action to stop OT service."""
         # Privileged access alone doesn't give availability reward
         state = initial_state.replace(
-            host_compromised=initial_state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=initial_state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=initial_state.host_has_valid_privesc.at[HOST_IDS['Op_Server0']].set(True),
         )
 
         rewards = compute_rewards_simple(state, const)
@@ -105,6 +108,7 @@ class TestOpServerReward:
         """Availability reward given when Impact stops OT service."""
         state = initial_state.replace(
             host_compromised=initial_state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=initial_state.host_has_valid_privesc.at[HOST_IDS['Op_Server0']].set(True),
             ot_service_stopped=initial_state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
         )
 
@@ -229,10 +233,12 @@ class TestRewardScenarios:
         """Test reward for realistic attack path: Enterprise + Op_Server with Impact."""
         # Red compromises Enterprise0 (privileged) and Op_Server0 (privileged + Impact)
         state = initial_state.replace(
-            host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED)
+            host_compromised=initial_state.host_compromised.at[HOST_IDS['Enterprise0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=initial_state.host_has_valid_privesc.at[HOST_IDS['Enterprise0']].set(True),
         )
         state = state.replace(
             host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS['Op_Server0']].set(True),
             ot_service_stopped=state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
         )
 

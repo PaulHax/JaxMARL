@@ -76,5 +76,5 @@ cage = [
 "Bug Tracker" = "https://github.com/FLAIROx/JaxMARL/issues"
 
 [tool.pytest.ini_options]
-addopts = "-n auto"
+addopts = "-n 4"
 asyncio_mode = "strict"

@@ -11,7 +11,7 @@ from jaxmarl.environments.cage.state import (
     ACTIVITY_NONE, ACTIVITY_SCAN, ACTIVITY_EXPLOIT,
 )
 
-# Default observation dimensions for backward compatibility (Scenario 2)
+# Scenario2-only constants. For other scenarios use compute_blue_obs_dim() / compute_red_obs_dim().
 NUM_HOSTS = 13
 BLUE_OBS_PER_HOST = 4
 BLUE_OBS_DIM = NUM_HOSTS * BLUE_OBS_PER_HOST  # 52

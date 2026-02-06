@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxmarl.environments.cage import CageEnv
-from jaxmarl.environments.cage.state import HOST_IDS, NUM_HOSTS
+from jaxmarl.environments.cage.state import HOST_IDS, NUM_HOSTS, COMPROMISE_PRIVILEGED
 from jaxmarl.environments.cage.actions import (
     BLUE_SLEEP, BLUE_MONITOR, BLUE_REMOVE_START, BLUE_RESTORE_START,
     RED_SLEEP, RED_DISCOVER_SUBNET_START, RED_SCAN_HOST_START, RED_EXPLOIT_START,
@@ -30,7 +30,7 @@ class TestActionEquivalence:
     @pytest.fixture
     def envs(self):
         """Create both environments."""
-        from tests.cyborg_utils import create_cyborg_env
+        from tests.cage.cyborg_utils import create_cyborg_env
 
         cyborg_env = create_cyborg_env(seed=42)
         jax_env = CageEnv()
@@ -38,7 +38,7 @@ class TestActionEquivalence:
 
     def test_blue_sleep_action(self, envs):
         """Sleep action should not change state."""
-        from tests.cyborg_utils import cyborg_state_to_dict, jax_state_to_dict
+        from tests.cage.cyborg_utils import cyborg_state_to_dict, jax_state_to_dict
         from CybORG.Shared.Actions import Sleep
 
         cyborg_env, jax_env = envs
@@ -57,7 +57,7 @@ class TestActionEquivalence:
 
     def test_blue_monitor_action(self, envs):
         """Monitor action should update detection."""
-        from tests.cyborg_utils import cyborg_state_to_dict
+        from tests.cage.cyborg_utils import cyborg_state_to_dict
         from CybORG.Shared.Actions import Monitor
 
         cyborg_env, jax_env = envs
@@ -68,7 +68,7 @@ class TestActionEquivalence:
 
     def test_red_discover_subnet(self, envs):
         """DiscoverRemoteSystems should discover hosts in target subnet."""
-        from tests.cyborg_utils import cyborg_state_to_dict, jax_state_to_dict
+        from tests.cage.cyborg_utils import cyborg_state_to_dict, jax_state_to_dict
         from CybORG.Shared.Actions import DiscoverRemoteSystems
 
         cyborg_env, jax_env = envs
@@ -91,7 +91,7 @@ class TestActionEquivalence:
 
     def test_red_scan_host(self, envs):
         """DiscoverNetworkServices should scan target host."""
-        from tests.cyborg_utils import jax_state_to_dict
+        from tests.cage.cyborg_utils import jax_state_to_dict
         from CybORG.Shared.Actions import DiscoverNetworkServices
 
         cyborg_env, jax_env = envs
@@ -120,7 +120,7 @@ class TestTrajectoryEquivalence:
     @pytest.fixture
     def envs(self):
         """Create both environments."""
-        from tests.cyborg_utils import create_cyborg_env
+        from tests.cage.cyborg_utils import create_cyborg_env
 
         cyborg_env = create_cyborg_env(seed=42)
         jax_env = CageEnv()
@@ -128,7 +128,7 @@ class TestTrajectoryEquivalence:
 
     def test_sleep_trajectory(self, envs):
         """Trajectory with all sleep actions should maintain initial state."""
-        from tests.cyborg_utils import jax_state_to_dict
+        from tests.cage.cyborg_utils import jax_state_to_dict
         from CybORG.Shared.Actions import Sleep
 
         cyborg_env, jax_env = envs
@@ -152,7 +152,7 @@ class TestTrajectoryEquivalence:
 
     def test_red_discovery_trajectory(self, envs):
         """Test red discovery sequence."""
-        from tests.cyborg_utils import jax_state_to_dict
+        from tests.cage.cyborg_utils import jax_state_to_dict
         from CybORG.Shared.Actions import Sleep, DiscoverRemoteSystems
 
         cyborg_env, jax_env = envs
@@ -180,7 +180,7 @@ class TestTrajectoryEquivalence:
     @pytest.mark.parametrize("seed", range(10))
     def test_random_trajectory(self, envs, seed):
         """Run random trajectories and verify state consistency."""
-        from tests.cyborg_utils import jax_state_to_dict
+        from tests.cage.cyborg_utils import jax_state_to_dict
 
         _, jax_env = envs
         key = jax.random.PRNGKey(seed)
@@ -216,7 +216,7 @@ class TestStatisticalEquivalence:
 
     def test_initial_state_consistency(self):
         """Initial state should be consistent across resets."""
-        from tests.cyborg_utils import create_cyborg_env, cyborg_state_to_dict, jax_state_to_dict
+        from tests.cage.cyborg_utils import create_cyborg_env, cyborg_state_to_dict, jax_state_to_dict
 
         jax_env = CageEnv()
 
@@ -307,7 +307,8 @@ class TestRewardEquivalence:
         for compromise_level in [0, 1, 2]:
             state = create_initial_state(const)
             state = state.replace(
-                host_compromised=state.host_compromised.at[HOST_IDS['Enterprise0']].set(compromise_level)
+                host_compromised=state.host_compromised.at[HOST_IDS['Enterprise0']].set(compromise_level),
+                host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS['Enterprise0']].set(compromise_level == COMPROMISE_PRIVILEGED),
             )
 
             rewards = compute_rewards_simple(state, const)
@@ -333,7 +334,8 @@ class TestRewardEquivalence:
         for hostname, expected in expected_rewards.items():
             state = create_initial_state(const)
             state = state.replace(
-                host_compromised=state.host_compromised.at[HOST_IDS[hostname]].set(COMPROMISE_PRIVILEGED)
+                host_compromised=state.host_compromised.at[HOST_IDS[hostname]].set(COMPROMISE_PRIVILEGED),
+                host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS[hostname]].set(True),
             )
             rewards = compute_rewards_simple(state, const)
 
@@ -353,6 +355,7 @@ class TestRewardEquivalence:
         # Op_Server0 with privileged access + Impact
         state = state.replace(
             host_compromised=state.host_compromised.at[HOST_IDS['Op_Server0']].set(COMPROMISE_PRIVILEGED),
+            host_has_valid_privesc=state.host_has_valid_privesc.at[HOST_IDS['Op_Server0']].set(True),
             ot_service_stopped=state.ot_service_stopped.at[HOST_IDS['Op_Server0']].set(True),
         )
         rewards = compute_rewards_simple(state, const)
@@ -367,7 +370,7 @@ class TestCybORGDirectComparison:
     @pytest.fixture
     def cyborg_env(self):
         """Create CybORG environment."""
-        from tests.cyborg_utils import create_cyborg_env
+        from tests.cage.cyborg_utils import create_cyborg_env
         return create_cyborg_env(seed=42)
 
     def test_initial_reward(self, cyborg_env):
