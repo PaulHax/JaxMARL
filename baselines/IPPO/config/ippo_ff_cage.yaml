@@ -1,0 +1,31 @@
+"LR": 3e-4
+"NUM_ENVS": 16
+"NUM_STEPS": 128
+"TOTAL_TIMESTEPS": 3e6
+"UPDATE_EPOCHS": 10
+"NUM_MINIBATCHES": 32
+"GAMMA": 0.99
+"GAE_LAMBDA": 0.95
+"CLIP_EPS": 0.2
+"ENT_COEF": 0.0
+"VF_COEF": 0.5
+"MAX_GRAD_NORM": 0.5
+"ACTIVATION": "tanh"
+"HIDDEN_DIM": 256
+"NETWORK_TYPE": "separate"
+"ENV_NAME": "HeuristicRedCAGE"
+"ENV_KWARGS":
+  scenario: "Scenario2"
+  max_steps: 100
+"ANNEAL_LR": False
+"SEED": 0
+"NUM_SEEDS": 1
+
+# Logging
+"MLFLOW_EXPERIMENT": "cage-training"
+"EXPERIMENT_DIR": "experiments"
+
+# CybORG Evaluation
+"EVAL_INTERVAL": 0
+"EVAL_EPISODES": 10
+"CYBORG_PATH": "/home/paulhax/src/cyber/cage-challenge-2/CybORG"

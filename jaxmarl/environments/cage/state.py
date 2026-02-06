@@ -1,0 +1,506 @@
+"""CAGE-JAX state dataclasses with configurable scenario support."""
+
+import jax.numpy as jnp
+from flax import struct
+import chex
+
+from jaxmarl.environments.cage.config import ScenarioConfig, create_scenario2_config
+
+
+# Scenario2-only constants. For other scenarios use build_const_from_config().
+NUM_HOSTS = 13
+NUM_SUBNETS = 3
+NUM_SERVICES = 10
+NUM_EXPLOITS = 8
+NUM_DECOY_TYPES = 8
+MAX_PROCESSES = 20
+
+# Scenario2-only host IDs (alphabetical order to match CybORG)
+HOST_IDS = {
+    'Defender': 0, 'Enterprise0': 1, 'Enterprise1': 2, 'Enterprise2': 3,
+    'Op_Host0': 4, 'Op_Host1': 5, 'Op_Host2': 6, 'Op_Server0': 7,
+    'User0': 8, 'User1': 9, 'User2': 10, 'User3': 11, 'User4': 12,
+}
+
+# Reverse lookup
+HOST_NAMES = {v: k for k, v in HOST_IDS.items()}
+
+# Subnet IDs (alphabetical order to match CybORG loader)
+SUBNET_IDS = {'Enterprise': 0, 'Operational': 1, 'User': 2}
+
+# Host to subnet mapping (matching alphabetical host order and subnet order)
+HOST_SUBNET = jnp.array([
+    0,              # Defender -> Enterprise subnet
+    0, 0, 0,        # Enterprise0-2 -> Enterprise subnet
+    1, 1, 1, 1,     # Op_Host0-2, Op_Server0 -> Operational subnet
+    2, 2, 2, 2, 2,  # User0-4 -> User subnet
+], dtype=jnp.int32)
+
+# Service IDs
+SERVICE_IDS = {
+    'ssh': 0, 'ftp': 1, 'http': 2, 'https': 3, 'smtp': 4,
+    'mysql': 5, 'smb': 6, 'rdp': 7, 'tomcat': 8, 'haraka': 9
+}
+
+# Exploit IDs
+EXPLOIT_IDS = {
+    'SSHBruteForce': 0, 'FTPDirectoryTraversal': 1, 'HTTPRFI': 2,
+    'HTTPSRFI': 3, 'HarakaRCE': 4, 'SQLInjection': 5,
+    'EternalBlue': 6, 'BlueKeep': 7
+}
+
+# Decoy types (alphabetical order to match CybORG)
+DECOY_IDS = {
+    'DecoyApache': 0, 'DecoyFemitter': 1, 'DecoyHarakaSMPT': 2, 'DecoySmss': 3,
+    'DecoySSHD': 4, 'DecoySvchost': 5, 'DecoyTomcat': 6, 'DecoyVsftpd': 7,
+}
+
+# Compromise levels
+COMPROMISE_NONE = 0
+COMPROMISE_USER = 1
+COMPROMISE_PRIVILEGED = 2
+
+# Activity types (for transient observation encoding)
+ACTIVITY_NONE = 0
+ACTIVITY_SCAN = 1
+ACTIVITY_EXPLOIT = 2
+
+# OS types
+OS_LINUX = 0
+OS_WINDOWS = 1
+
+
+@struct.dataclass
+class CageState:
+    """Mutable game state for CAGE environment.
+
+    All arrays are sized based on max dimensions to support JIT compilation.
+    Actual sizes are determined by const.num_hosts, const.num_subnets, etc.
+    """
+    time: int
+    done: chex.Array  # scalar bool
+
+    # Host state tensors
+    host_compromised: chex.Array       # (max_hosts,) int: 0=None, 1=User, 2=Privileged
+    host_services: chex.Array          # (max_hosts, max_services) bool: service running flags
+    host_processes: chex.Array         # (max_hosts, max_processes) int: process IDs (0=empty)
+    host_decoys: chex.Array            # (max_hosts, max_decoys) bool: decoy type deployed
+
+    # Session tracking
+    red_sessions: chex.Array           # (max_hosts,) int: session count per host
+    red_privilege: chex.Array          # (max_hosts,) int: 0=None, 1=User, 2=Root/SYSTEM
+    blue_sessions: chex.Array          # (max_hosts,) int: always 1 per host (Velociraptor)
+
+    # Red agent knowledge (partial observability)
+    # NOTE: Fields with _jax suffix are JAX-specific simplifications for action masking.
+    # CybORG doesn't track discovered/scanned hosts explicitly - it checks
+    # network routing dynamically at action time. JAX uses explicit state to
+    # avoid recomputing routing on every action, which is more efficient for
+    # vectorized environments. The game outcomes (rewards, compromise) match
+    # CybORG, but these internal tracking fields will differ in comparisons.
+    red_discovered_hosts_jax: chex.Array   # (max_hosts,) bool: host IP discovered
+    red_scanned_hosts_jax: chex.Array      # (max_hosts,) bool: ports scanned
+
+    # Reward tracking
+    cumulative_red_reward: chex.Array   # scalar float
+    cumulative_blue_reward: chex.Array  # scalar float
+
+    # Last action success (for observations and reward calculation)
+    last_red_action_success: chex.Array  # scalar bool
+    last_blue_action_success: chex.Array  # scalar bool: False triggers -0.1 penalty (CybORG InvalidAction.cost)
+
+    # Impact tracking - OT service stopped on operational hosts
+    ot_service_stopped: chex.Array     # (max_hosts,) bool: OT service stopped by Impact
+
+    # OT service discovery - Red learns about OT service when doing PrivilegeEscalate on operational host
+    # CybORG: PrivilegeEscalate runs ExploreHost which finds OTService process, enabling Impact
+    red_knows_ot_service: chex.Array   # (max_hosts,) bool: Red discovered OT service on this host
+
+    # Activity detection - tracks if exploit activity was observed (for Blue observations)
+    host_activity_detected: chex.Array  # (max_hosts,) bool: exploit activity detected by Monitor
+    # Actionable activity - tracks if Monitor observed suspicious PIDs (Remove can act)
+    host_activity_actionable: chex.Array  # (max_hosts,) bool: actionable exploit activity detected
+
+    # Unknown observation state - set after Remove, cleared when new evidence arrives (e.g., Analyse malware)
+    host_observation_unknown: chex.Array  # (max_hosts,) bool: observation should show "Unknown"
+
+    # Red activity this step - tracks activity TYPE on each host for Blue observations
+    # Cleared at start of each step, set by Red actions. Matches CybORG's transient activity detection.
+    # Values: 0=None, 1=Scan (DiscoverNetworkServices), 2=Exploit (ExploitRemoteService)
+    red_activity_this_step: chex.Array  # (max_hosts,) int: activity type this step
+    # Red actionable activity this step - True when exploit created suspicious PID (Remove can act)
+    red_activity_actionable_this_step: chex.Array  # (max_hosts,) bool
+
+    # Malware presence - tracks detectable privilege escalation for Blue observations
+    # In CybORG, Blue detects Privileged compromise via malware files (Density >= 0.9)
+    # This is separate from Red's actual privilege level
+    host_has_malware: chex.Array  # (max_hosts,) bool: malware present (from PrivilegeEscalate)
+
+    # Malware detection - tracks whether Blue has discovered malware via Analyse
+    # CybORG requires Analyse action to detect malware files; PrivEsc alone doesn't reveal Privileged
+    host_malware_detected: chex.Array  # (max_hosts,) bool: Blue has detected malware via Analyse
+
+    # Malware presence - set when exploit succeeds (CybORG creates cmd.exe/cmd.sh with density=0.9)
+    host_has_malware: chex.Array  # (max_hosts,) bool: malware installed by exploit
+
+    # Resilience tracking - tracks Red's last action for Blue's defensive response
+    # Used by ResilienceMetric to award bonuses for correct Blue actions
+    last_red_action_type: chex.Array     # scalar int: 0=Sleep, 1=Discover, 2=Scan, 3=Exploit, 4=PrivEsc, 5=Impact
+    last_red_action_target: chex.Array   # scalar int: target host index (-1 if no target)
+    last_red_action_success: chex.Array  # scalar bool: whether Red's action succeeded
+
+    # Optional exploit detection RNG sequence for parity tests (Python random)
+    # When enabled, _apply_exploit will consume from exploit_detection_randoms
+    # instead of jax.random.uniform. This allows deterministic alignment with CybORG.
+    exploit_detection_randoms: chex.Array  # (max_steps,) float: precomputed randoms
+    exploit_detection_index: chex.Array    # scalar int: next index into exploit_detection_randoms
+    use_exploit_detection_randoms: chex.Array  # scalar bool: use sequence instead of JAX RNG
+
+    # Valid privileged session tracking - matches CybORG's reward logic
+    # CybORG only counts root on Linux, SYSTEM on Windows. Initial abstract sessions
+    # (SYSTEM on Linux) don't count for rewards. Set by PrivEsc action on Linux,
+    # or by initial foothold on Windows.
+    host_has_valid_privesc: chex.Array   # (max_hosts,) bool: has a "counting" privileged session
+
+
+# Host type constants for ResilienceMetric
+HOST_TYPE_NORMAL = 0
+HOST_TYPE_AUTH = 1
+HOST_TYPE_DATABASE = 2
+HOST_TYPE_FRONT = 3
+
+
+@struct.dataclass
+class CageConst:
+    """Immutable configuration for CAGE environment."""
+    # Network topology
+    adjacency: chex.Array              # (num_hosts, num_hosts) bool: can host i reach host j
+    subnet_adjacency: chex.Array       # (num_subnets, num_subnets) bool: subnet connectivity
+    host_subnet: chex.Array            # (num_hosts,) int: which subnet each host belongs to
+
+    # Host properties
+    host_os: chex.Array                # (num_hosts,) int: 0=Linux, 1=Windows
+    host_confidentiality: chex.Array   # (num_hosts,) float: reward weight
+    host_availability: chex.Array      # (num_hosts,) float: availability weight
+    initial_services: chex.Array       # (num_hosts, num_services) bool: initial service config
+    operational_targets: chex.Array    # (num_hosts,) bool: hosts that provide availability reward
+
+    # Host type for ResilienceMetric (determined by hostname pattern)
+    # 0=Normal, 1=Auth, 2=Database, 3=Front
+    host_type: chex.Array              # (num_hosts,) int: host type classification
+
+    # Service vulnerability mapping: which exploits work on which services
+    service_exploits: chex.Array       # (num_services, num_exploits) bool: service i vulnerable to exploit j
+
+    # Exploit preconditions (matching CybORG behavior)
+    # SSH Bruteforce requires bruteforceable users on target host
+    # Hosts WITHOUT bruteforceable users: Defender, Op_Host2, Op_Server0
+    bruteforceable_hosts: chex.Array   # (num_hosts,) bool: host has bruteforceable users
+    # HTTP/HTTPS RFI requires 'rfi' property in process
+    # Only Enterprise0-2 have RFI-enabled HTTP
+    rfi_vulnerable_hosts: chex.Array   # (num_hosts,) bool: host has RFI vulnerability
+
+    # Indices for decoy-deployable hosts
+    decoy_host_indices: chex.Array     # (num_decoy_hosts,) int: indices of hosts that can have decoys
+
+    # Red agent initial foothold
+    red_start_hosts: chex.Array        # (num_red_agents,) int: initial compromise host indices
+
+    # B_lineAgent target host indices (looked up by name for scenario compatibility)
+    # CybORG's B_lineAgent randomly selects a User host, then attacks its connected Enterprise
+    bline_user_host: int = 9           # User1 - default target (used if random disabled)
+    bline_enterprise1: int = 2         # Enterprise1 - default Enterprise target
+    bline_enterprise2: int = 3         # Enterprise2
+    bline_op_server0: int = 7          # Op_Server0 - final target for Impact
+
+    # User hosts that B_lineAgent can randomly select (excludes User0 which is Red's foothold)
+    bline_user_hosts: chex.Array = None  # (num_attackable_users,) int: User1, User2, User3, User4 indices
+    # User→Enterprise mapping: which Enterprise host each User connects to
+    # user_to_enterprise[i] = Enterprise index for bline_user_hosts[i]
+    user_to_enterprise: chex.Array = None  # (num_attackable_users,) int: connected Enterprise indices
+
+    # Subnet indices (for agents that need to identify hosts by subnet)
+    enterprise_subnet_idx: int = 0
+    operational_subnet_idx: int = 1
+    user_subnet_idx: int = 2
+
+    # Special host indices for exploit behavior
+    user2_host_idx: int = 10  # For BlueKeep special case
+
+    # Scenario parameters
+    max_steps: int = 100
+    num_hosts: int = NUM_HOSTS
+    num_subnets: int = NUM_SUBNETS
+    num_services: int = NUM_SERVICES
+    num_exploits: int = NUM_EXPLOITS
+    num_decoys: int = NUM_DECOY_TYPES
+    num_decoy_hosts: int = 13  # All hosts can have decoys (matching CybORG)
+    num_red_agents: int = 1
+    num_blue_agents: int = 1
+
+
+def build_const_from_config(config: ScenarioConfig) -> CageConst:
+    """Build CageConst from ScenarioConfig."""
+    num_hosts = config.num_hosts
+    num_subnets = config.num_subnets
+    num_services = config.num_services
+    num_exploits = config.num_exploits
+    num_decoys = config.num_decoys
+
+    host_ids = config.host_ids
+    subnet_ids = config.subnet_ids
+    service_ids = config.service_ids
+    exploit_ids = config.exploit_ids
+
+    # Build host_subnet mapping
+    host_subnet = jnp.zeros(num_hosts, dtype=jnp.int32)
+    for h in config.hosts:
+        host_subnet = host_subnet.at[host_ids[h.name]].set(subnet_ids[h.subnet])
+
+    # Build subnet adjacency from config
+    subnet_adjacency = jnp.zeros((num_subnets, num_subnets), dtype=jnp.bool_)
+    for s in config.subnets:
+        src_idx = subnet_ids[s.name]
+        for connected in s.connected_subnets:
+            dst_idx = subnet_ids[connected]
+            subnet_adjacency = subnet_adjacency.at[src_idx, dst_idx].set(True)
+
+    # Build host adjacency from subnet adjacency
+    adjacency = jnp.zeros((num_hosts, num_hosts), dtype=jnp.bool_)
+    for i in range(num_hosts):
+        for j in range(num_hosts):
+            subnet_i = int(host_subnet[i])
+            subnet_j = int(host_subnet[j])
+            adjacency = adjacency.at[i, j].set(subnet_adjacency[subnet_i, subnet_j])
+
+    # Build host OS array
+    host_os = jnp.zeros(num_hosts, dtype=jnp.int32)
+    for h in config.hosts:
+        os_val = OS_WINDOWS if h.os.lower() == 'windows' else OS_LINUX
+        host_os = host_os.at[host_ids[h.name]].set(os_val)
+
+    # Build confidentiality and availability arrays
+    host_confidentiality = jnp.zeros(num_hosts, dtype=jnp.float32)
+    host_availability = jnp.zeros(num_hosts, dtype=jnp.float32)
+    operational_targets = jnp.zeros(num_hosts, dtype=jnp.bool_)
+
+    for h in config.hosts:
+        idx = host_ids[h.name]
+        host_confidentiality = host_confidentiality.at[idx].set(h.confidentiality)
+        host_availability = host_availability.at[idx].set(h.availability)
+        if h.is_operational_target:
+            operational_targets = operational_targets.at[idx].set(True)
+
+    # Build initial services
+    initial_services = jnp.zeros((num_hosts, num_services), dtype=jnp.bool_)
+    for h in config.hosts:
+        host_idx = host_ids[h.name]
+        for svc in h.services:
+            if svc in service_ids:
+                svc_idx = service_ids[svc]
+                initial_services = initial_services.at[host_idx, svc_idx].set(True)
+
+    # Build service-exploit vulnerability matrix
+    service_exploits = jnp.zeros((num_services, num_exploits), dtype=jnp.bool_)
+    for svc, vulns in config.service_vulnerabilities.items():
+        if svc in service_ids:
+            svc_idx = service_ids[svc]
+            for exploit in vulns:
+                if exploit in exploit_ids:
+                    exp_idx = exploit_ids[exploit]
+                    service_exploits = service_exploits.at[svc_idx, exp_idx].set(True)
+
+    # Build decoy host indices
+    decoy_indices = config.decoy_host_indices
+    decoy_host_indices = jnp.array(decoy_indices, dtype=jnp.int32)
+
+    # Build red start hosts
+    red_agents = config.get_red_agents()
+    red_start_hosts = jnp.zeros(len(red_agents), dtype=jnp.int32)
+    for i, agent in enumerate(red_agents):
+        if agent.starting_host:
+            red_start_hosts = red_start_hosts.at[i].set(host_ids[agent.starting_host])
+
+    # Look up B_lineAgent target hosts by name (works for any scenario)
+    # CybORG topology: User hosts connect to specific Enterprise hosts
+    bline_user_host = host_ids.get('User1', 9)
+    bline_enterprise1 = host_ids.get('Enterprise1', 2)
+    bline_enterprise2 = host_ids.get('Enterprise2', 3)
+    bline_op_server0 = host_ids.get('Op_Server0', 7)
+
+    # Build list of attackable User hosts (excluding User0 which is Red's foothold)
+    # CybORG's B_lineAgent randomly selects from discovered hosts in User subnet.
+    user_host_names = sorted(
+        [h.name for h in config.hosts if h.name.startswith('User') and h.name != 'User0']
+    )
+    bline_user_hosts = jnp.array(
+        [host_ids.get(name, 0) for name in user_host_names], dtype=jnp.int32
+    )
+
+    # User→Enterprise mapping: derived from scenario connectivity.
+    # If not provided, default to Enterprise0 for all users.
+    enterprise0_idx = host_ids.get('Enterprise0', 1)
+    mapping = getattr(config, "user_to_enterprise", {}) or {}
+    enterprise_indices = []
+    for user_name in user_host_names:
+        ent_name = mapping.get(user_name)
+        ent_idx = host_ids.get(ent_name, enterprise0_idx) if ent_name else enterprise0_idx
+        enterprise_indices.append(ent_idx)
+    user_to_enterprise = jnp.array(enterprise_indices, dtype=jnp.int32)
+
+    # Subnet indices for dynamic host identification
+    enterprise_subnet_idx = subnet_ids.get('Enterprise', 0)
+    operational_subnet_idx = subnet_ids.get('Operational', 1)
+    user_subnet_idx = subnet_ids.get('User', 2)
+
+    # Special host index for BlueKeep behavior
+    user2_host_idx = host_ids.get('User2', 10)
+
+    # Build bruteforceable_hosts from config
+    # CybORG SSHBruteForce checks for bruteforceable users in host image
+    bruteforceable_hosts = jnp.zeros(num_hosts, dtype=jnp.bool_)
+    for host in config.hosts:
+        if host.name in host_ids and host.has_bruteforceable_users:
+            bruteforceable_hosts = bruteforceable_hosts.at[host_ids[host.name]].set(True)
+
+    # Build rfi_vulnerable_hosts from config service_properties
+    # CybORG HTTPRFI checks for 'rfi' in process.properties
+    rfi_vulnerable_hosts = jnp.zeros(num_hosts, dtype=jnp.bool_)
+    for host in config.hosts:
+        if host.name in host_ids:
+            has_rfi = any('rfi' in props for props in host.service_properties.values())
+            if has_rfi:
+                rfi_vulnerable_hosts = rfi_vulnerable_hosts.at[host_ids[host.name]].set(True)
+
+    # Build host_type array for ResilienceMetric
+    # Classify hosts based on hostname pattern
+    host_type = jnp.zeros(num_hosts, dtype=jnp.int32)
+    for host in config.hosts:
+        if host.name in host_ids:
+            idx = host_ids[host.name]
+            if 'Auth' in host.name:
+                host_type = host_type.at[idx].set(HOST_TYPE_AUTH)
+            elif 'Database' in host.name:
+                host_type = host_type.at[idx].set(HOST_TYPE_DATABASE)
+            elif 'Front' in host.name:
+                host_type = host_type.at[idx].set(HOST_TYPE_FRONT)
+
+    return CageConst(
+        adjacency=adjacency,
+        subnet_adjacency=subnet_adjacency,
+        host_subnet=host_subnet,
+        host_os=host_os,
+        host_confidentiality=host_confidentiality,
+        host_availability=host_availability,
+        initial_services=initial_services,
+        operational_targets=operational_targets,
+        host_type=host_type,
+        service_exploits=service_exploits,
+        bruteforceable_hosts=bruteforceable_hosts,
+        rfi_vulnerable_hosts=rfi_vulnerable_hosts,
+        decoy_host_indices=decoy_host_indices,
+        red_start_hosts=red_start_hosts,
+        bline_user_host=bline_user_host,
+        bline_enterprise1=bline_enterprise1,
+        bline_enterprise2=bline_enterprise2,
+        bline_op_server0=bline_op_server0,
+        bline_user_hosts=bline_user_hosts,
+        user_to_enterprise=user_to_enterprise,
+        enterprise_subnet_idx=enterprise_subnet_idx,
+        operational_subnet_idx=operational_subnet_idx,
+        user_subnet_idx=user_subnet_idx,
+        user2_host_idx=user2_host_idx,
+        max_steps=config.max_steps,
+        num_hosts=num_hosts,
+        num_subnets=num_subnets,
+        num_services=num_services,
+        num_exploits=num_exploits,
+        num_decoys=num_decoys,
+        num_decoy_hosts=len(decoy_indices),
+        num_red_agents=config.num_red_agents,
+        num_blue_agents=config.num_blue_agents,
+    )
+
+
+def create_scenario2_const() -> CageConst:
+    """Create constants for CAGE Challenge 2 Scenario 2."""
+    config = create_scenario2_config()
+    return build_const_from_config(config)
+
+
+def create_const_from_scenario(scenario_name: str) -> CageConst:
+    """Create CageConst from a named scenario."""
+    from jaxmarl.environments.cage.config import get_scenario
+    config = get_scenario(scenario_name)
+    return build_const_from_config(config)
+
+
+def create_initial_state(const: CageConst) -> CageState:
+    """Create initial state for CAGE environment."""
+    num_hosts = const.num_hosts
+    num_services = const.num_services
+    num_decoys = const.num_decoys
+
+    return CageState(
+        time=0,
+        done=jnp.array(False),
+        host_compromised=jnp.zeros(num_hosts, dtype=jnp.int32),
+        host_services=const.initial_services.copy(),
+        host_processes=jnp.zeros((num_hosts, MAX_PROCESSES), dtype=jnp.int32),
+        host_decoys=jnp.zeros((num_hosts, num_decoys), dtype=jnp.bool_),
+        red_sessions=jnp.zeros(num_hosts, dtype=jnp.int32),
+        red_privilege=jnp.zeros(num_hosts, dtype=jnp.int32),
+        blue_sessions=jnp.ones(num_hosts, dtype=jnp.int32),
+        red_discovered_hosts_jax=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_scanned_hosts_jax=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        cumulative_red_reward=jnp.array(0.0),
+        cumulative_blue_reward=jnp.array(0.0),
+        last_blue_action_success=jnp.array(True),  # True by default, set False on failed actions
+        ot_service_stopped=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_knows_ot_service=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_activity_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_activity_actionable=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_observation_unknown=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        red_activity_this_step=jnp.zeros(num_hosts, dtype=jnp.int32),
+        red_activity_actionable_this_step=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_has_malware=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        host_malware_detected=jnp.zeros(num_hosts, dtype=jnp.bool_),
+        last_red_action_type=jnp.array(0, dtype=jnp.int32),
+        last_red_action_target=jnp.array(-1, dtype=jnp.int32),
+        last_red_action_success=jnp.array(False),
+        exploit_detection_randoms=jnp.zeros(const.max_steps, dtype=jnp.float32),
+        exploit_detection_index=jnp.array(0, dtype=jnp.int32),
+        use_exploit_detection_randoms=jnp.array(False),
+        host_has_valid_privesc=jnp.zeros(num_hosts, dtype=jnp.bool_),
+    )
+
+
+def create_initial_state_with_red_foothold(const: CageConst) -> CageState:
+    """Create initial state where Red has a foothold on configured start hosts.
+
+    CybORG starts Red with SYSTEM/root (PRIVILEGED) access on the foothold host.
+    The initial session type determines whether it counts for rewards:
+    - SYSTEM on Windows: counts (valid privileged session)
+    - SYSTEM on Linux: doesn't count (abstract session, need PrivEsc to get root)
+    """
+    state = create_initial_state(const)
+
+    # Set up red foothold using scatter operations (JAX-compatible)
+    red_start_mask = jnp.zeros(const.num_hosts, dtype=jnp.bool_)
+    red_start_mask = red_start_mask.at[const.red_start_hosts].set(True)
+
+    # Valid privesc: Windows foothold hosts count (SYSTEM on Windows),
+    # Linux foothold hosts don't count (SYSTEM on Linux = abstract session)
+    is_windows = const.host_os == OS_WINDOWS
+    valid_privesc_mask = red_start_mask & is_windows
+
+    state = state.replace(
+        host_compromised=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.host_compromised),
+        red_sessions=jnp.where(red_start_mask, 1, state.red_sessions),
+        red_privilege=jnp.where(red_start_mask, COMPROMISE_PRIVILEGED, state.red_privilege),
+        red_discovered_hosts_jax=red_start_mask | state.red_discovered_hosts_jax,
+        red_scanned_hosts_jax=red_start_mask | state.red_scanned_hosts_jax,
+        host_has_valid_privesc=valid_privesc_mask | state.host_has_valid_privesc,
+    )
+
+    return state
