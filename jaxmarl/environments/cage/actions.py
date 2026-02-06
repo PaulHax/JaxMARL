@@ -652,6 +652,9 @@ def _apply_scan_host(state: CageState, target_host: int, const: CageConst) -> Ca
     scan_visible = can_scan & has_service
 
     return state.replace(
+        red_discovered_hosts_jax=state.red_discovered_hosts_jax.at[target_host].set(
+            state.red_discovered_hosts_jax[target_host] | can_scan
+        ),
         red_scanned_hosts_jax=state.red_scanned_hosts_jax.at[target_host].set(
             state.red_scanned_hosts_jax[target_host] | can_scan
         ),
@@ -837,6 +840,9 @@ def _apply_exploit(
         red_sessions=state.red_sessions.at[target_host].set(new_sessions),
         red_privilege=state.red_privilege.at[target_host].set(new_privilege),
         host_has_valid_privesc=state.host_has_valid_privesc.at[target_host].set(new_valid_privesc),
+        red_discovered_hosts_jax=state.red_discovered_hosts_jax.at[target_host].set(
+            state.red_discovered_hosts_jax[target_host] | success
+        ),
         red_activity_this_step=state.red_activity_this_step.at[target_host].set(
             jnp.where(activity_visible, ACTIVITY_EXPLOIT, state.red_activity_this_step[target_host])
         ),

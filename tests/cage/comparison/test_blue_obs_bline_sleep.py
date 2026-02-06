@@ -6,6 +6,7 @@ against JAX CAGE observations under identical Red actions.
 """
 
 import inspect
+import random
 
 import numpy as np
 import pytest
@@ -27,6 +28,8 @@ requires_cyborg = pytest.mark.skipif(
 
 
 def _assert_blue_obs_parity(blue_action_idx: int, steps: int = 20, seed: int = 42):
+    random.seed(seed)
+
     from CybORG import CybORG
     from CybORG.Agents.SimpleAgents.B_line import B_lineAgent
     from CybORG.Agents.Wrappers import BlueTableWrapper

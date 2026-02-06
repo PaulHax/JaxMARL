@@ -128,6 +128,7 @@ def extract_cyborg_state(
     include_obs: bool = True,
     discovered_hosts_override: Optional[set] = None,
     scanned_hosts_override: Optional[set] = None,
+    activity_detected_override: Optional[set] = None,
 ) -> StateSnapshot:
     """Extract comprehensive state from CybORG environment.
 
@@ -205,6 +206,11 @@ def extract_cyborg_state(
         for hostname in scanned_hosts_override:
             if hostname in host_ids:
                 snapshot.red_scanned_hosts[hostname] = True
+
+    if activity_detected_override:
+        for hostname in activity_detected_override:
+            if hostname in host_ids:
+                snapshot.host_activity_detected[hostname] = True
 
     rewards = cyborg_env.get_rewards()
     snapshot.reward_blue = rewards.get('Blue', 0.0)

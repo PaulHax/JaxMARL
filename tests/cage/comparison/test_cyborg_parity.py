@@ -919,7 +919,10 @@ class TestMultiSeedConsistency:
     def test_reactive_blue_consistent_across_seeds(self, seed):
         """Reactive blue agents should produce matching states."""
         harness = DifferentialHarness(seed=seed, max_steps=30, verbose=False)
-        result = harness.run_bline_episode(reactive_remove_policy, use_jax_bline=False)
+        result = harness.run_bline_episode(
+            reactive_remove_policy, use_jax_bline=False,
+            blue_policy_uses_cyborg_state=True,
+        )
 
         for sr in result.step_results:
             assert abs(sr.cyborg_state.reward_blue - sr.jax_state.reward_blue) < 0.15, \

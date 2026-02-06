@@ -16,7 +16,7 @@ import jax.numpy as jnp
 
 from jaxmarl.environments.cage import CageEnv
 from jaxmarl.environments.cage.state import (
-    HOST_IDS, CageState, CageConst,
+    HOST_IDS, HOST_NAMES, CageState, CageConst,
     COMPROMISE_NONE, COMPROMISE_USER, COMPROMISE_PRIVILEGED,
 )
 from jaxmarl.environments.cage.actions import (
@@ -252,6 +252,7 @@ class DifferentialHarness:
         self.red_known_ips = {}
         self.red_discovered_hosts = set()
         self.red_scanned_hosts = set()
+        self.activity_detected_hosts = set()
         self._update_known_ips_from_observation()
 
         cyborg_state = extract_cyborg_state(
@@ -260,6 +261,7 @@ class DifferentialHarness:
             include_obs=self.check_obs,
             discovered_hosts_override=self.red_discovered_hosts,
             scanned_hosts_override=self.red_scanned_hosts,
+            activity_detected_override=self.activity_detected_hosts,
         )
         jax_state = extract_jax_state(self.jax_state, self.jax_env.const, config=self.config, include_obs=self.check_obs)
 
@@ -280,6 +282,53 @@ class DifferentialHarness:
                 host_info = obs.get(ip_str, {})
                 if isinstance(host_info, dict) and ('Processes' in host_info or 'Services' in host_info):
                     self.red_scanned_hosts.add(hostname)
+
+    def _update_activity_from_blue_obs(self, blue_action_jax: int):
+        """Track Blue activity detection from CybORG Blue observation.
+
+        Replicates BlueTableWrapper's classification:
+        - 3+ connections to 3+ local ports → Scan
+        - remote_port 4444 → Exploit
+        - 3+ connections to 1 local port → Exploit
+        """
+        from jaxmarl.environments.cage.actions import (
+            BLUE_REMOVE_START, BLUE_RESTORE_START,
+        )
+
+        num_hosts = len(HOST_IDS)
+        if BLUE_REMOVE_START <= blue_action_jax < BLUE_REMOVE_START + num_hosts:
+            host_idx = blue_action_jax - BLUE_REMOVE_START
+            hostname = HOST_NAMES[host_idx]
+            self.activity_detected_hosts.discard(hostname)
+        elif BLUE_RESTORE_START <= blue_action_jax < BLUE_RESTORE_START + num_hosts:
+            host_idx = blue_action_jax - BLUE_RESTORE_START
+            hostname = HOST_NAMES[host_idx]
+            self.activity_detected_hosts.discard(hostname)
+
+        blue_obs = self.cyborg_env.get_observation('Blue')
+        if not blue_obs:
+            return
+
+        for hostname, host_data in blue_obs.items():
+            if hostname not in HOST_IDS or not isinstance(host_data, dict):
+                continue
+            if 'Processes' not in host_data:
+                continue
+
+            connections = [
+                conn
+                for proc in host_data['Processes']
+                if isinstance(proc, dict)
+                for conn in proc.get('Connections', [])
+            ]
+            if not connections:
+                continue
+
+            local_ports = {conn.get('local_port') for conn in connections if isinstance(conn, dict)} - {None}
+            remote_ports = {conn.get('remote_port') for conn in connections if isinstance(conn, dict)} - {None}
+
+            if 4444 in remote_ports or (len(connections) >= 3 and len(local_ports) == 1):
+                self.activity_detected_hosts.add(hostname)
 
     def step(
         self,
@@ -306,6 +355,7 @@ class DifferentialHarness:
         self.cyborg_env.step('Red', red_cyborg)
 
         self._update_known_ips_from_observation()
+        self._update_activity_from_blue_obs(blue_action_jax)
 
         # Get state-based rewards after both steps, then add Blue's action cost
         cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
@@ -328,6 +378,7 @@ class DifferentialHarness:
             include_obs=self.check_obs,
             discovered_hosts_override=self.red_discovered_hosts,
             scanned_hosts_override=self.red_scanned_hosts,
+            activity_detected_override=self.activity_detected_hosts,
         )
         cyborg_state.reward_blue = cyborg_blue_reward
         cyborg_state.reward_red = cyborg_red_reward
@@ -420,12 +471,16 @@ class DifferentialHarness:
         self,
         blue_policy: Callable[[StateSnapshot, int], int],
         use_jax_bline: bool = True,
+        blue_policy_uses_cyborg_state: bool = False,
     ) -> TestResult:
         """Run episode with B_lineAgent for red.
 
         Args:
             blue_policy: Function (state, step) -> blue_action_jax
             use_jax_bline: If True, use JAX B_lineAgent; if False, use CybORG's
+            blue_policy_uses_cyborg_state: If True, feed CybORG state to blue
+                policy so both envs receive identical actions regardless of
+                detection RNG divergence.
 
         Returns:
             TestResult with complete episode data
@@ -479,9 +534,11 @@ class DifferentialHarness:
                 steps_completed=0,
             )
 
+            policy_state = cyborg_state if blue_policy_uses_cyborg_state else jax_state
+
             for step in range(self.max_steps):
                 try:
-                    blue_action = blue_policy(jax_state, step)
+                    blue_action = blue_policy(policy_state, step)
 
                     obs = self.cyborg_env.get_observation('Red')
                     action_space = self.cyborg_env.get_action_space('Red')
@@ -496,6 +553,7 @@ class DifferentialHarness:
                     # Step Red to complete the timestep
                     self.cyborg_env.step('Red', cyborg_red_action)
                     self._update_known_ips_from_observation()
+                    self._update_activity_from_blue_obs(blue_action)
 
                     # Get state-based rewards after both steps, then add Blue's action cost
                     cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
@@ -522,6 +580,7 @@ class DifferentialHarness:
                         include_obs=self.check_obs,
                         discovered_hosts_override=self.red_discovered_hosts,
                         scanned_hosts_override=self.red_scanned_hosts,
+                        activity_detected_override=self.activity_detected_hosts,
                     )
                     cyborg_state_snap.reward_blue = cyborg_blue_reward
                     cyborg_state_snap.reward_red = cyborg_red_reward
@@ -562,6 +621,7 @@ class DifferentialHarness:
                             result.warning_diffs += 1
 
                     jax_state = jax_state_snap
+                    policy_state = cyborg_state_snap if blue_policy_uses_cyborg_state else jax_state
 
                     if self.verbose:
                         print(f"Step {step}: {step_result.red_action_desc}")
@@ -623,6 +683,7 @@ class DifferentialHarness:
 
                 self.cyborg_env.step('Red', cyborg_red_action)
                 self._update_known_ips_from_observation()
+                self._update_activity_from_blue_obs(blue_action)
 
                 cyborg_blue_reward = self.cyborg_env.get_rewards()['Blue'] + blue_action_cost
                 cyborg_red_reward = self.cyborg_env.get_rewards()['Red']
@@ -648,6 +709,7 @@ class DifferentialHarness:
                     include_obs=self.check_obs,
                     discovered_hosts_override=self.red_discovered_hosts,
                     scanned_hosts_override=self.red_scanned_hosts,
+                    activity_detected_override=self.activity_detected_hosts,
                 )
                 cyborg_state_snap.reward_blue = cyborg_blue_reward
                 cyborg_state_snap.reward_red = cyborg_red_reward
